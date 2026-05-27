@@ -1,0 +1,6 @@
+{
+  "name": "Food Log & Nutrition Tracker",
+  "description": "Log foods and analyze 41 essential nutrients compared to recommended daily allowances (RDA). Features visual macro spreads, deficiency warnings, and log trends.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
