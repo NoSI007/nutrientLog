@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -260,6 +261,10 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
             val json = repository.exportToJson()
             onSuccess(json)
         }
+    }
+
+    suspend fun getExportString(): String {
+        return repository.exportToJson()
     }
 
     fun generateHtmlReport(report: PeriodicReport): String {
@@ -812,8 +817,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun StateFlow<List<FoodLogEntry>>.mapToMacroSpread(): StateFlow<MacroSpreadRatio> {
-        return combine(this) { wrapperList ->
-            val entries = wrapperList[0]
+        return this.map { entries ->
             var totalCarbs = 0.0
             var totalProtein = 0.0
             var totalFat = 0.0
@@ -846,8 +850,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun StateFlow<List<NutrientStatus>>.mapToWarnings(): StateFlow<List<DeficiencyWarning>> {
-        return combine(this) { wrapperList ->
-            val statuses = wrapperList[0]
+        return this.map { statuses ->
             val warningList = mutableListOf<DeficiencyWarning>()
 
             for (status in statuses) {
@@ -886,8 +889,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun StateFlow<List<FoodLogEntry>>.mapToTrends(): StateFlow<List<DayTrend>> {
-        return combine(this) { wrapperList ->
-            val entries = wrapperList[0]
+        return this.map { entries ->
             val groupedByDate = entries.groupBy { it.date }
 
             val datesList = mutableListOf<String>()

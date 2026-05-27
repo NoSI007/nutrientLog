@@ -1752,18 +1752,36 @@ fun PeriodicReportsTab(viewModel: NutritionViewModel) {
         viewModel.getPeriodicReport(selectedDays, selectedLabel)
     }
 
+    var pendingHtmlReportText by remember { mutableStateOf<String?>(null) }
+
     val htmlReportLauncher = rememberLauncherForActivityResult(
         contract = SafeCreateDocument("text/html")
     ) { uri ->
         if (uri != null) {
-            val htmlString = viewModel.generateHtmlReport(report)
-            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                try {
-                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                        outputStream.write(htmlString.toByteArray(Charsets.UTF_8))
+            val htmlToWrite = pendingHtmlReportText
+            if (htmlToWrite != null) {
+                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            outputStream.write(htmlToWrite.toByteArray(Charsets.UTF_8))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    } finally {
+                        pendingHtmlReportText = null
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                }
+            } else {
+                // fallback if callback happens but state was lost or not set yet
+                val htmlString = viewModel.generateHtmlReport(report)
+                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            outputStream.write(htmlString.toByteArray(Charsets.UTF_8))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
             }
         }
@@ -1896,6 +1914,7 @@ fun PeriodicReportsTab(viewModel: NutritionViewModel) {
                         Button(
                             onClick = {
                                 try {
+                                    pendingHtmlReportText = viewModel.generateHtmlReport(report)
                                     htmlReportLauncher.launch("nutriscribe-report-$selectedLabel.html")
                                 } catch (e: ActivityNotFoundException) {
                                     Toast.makeText(context, "System File Picker not available. Please use 'Copy HTML to Clipboard' instead.", Toast.LENGTH_LONG).show()
@@ -3825,19 +3844,37 @@ fun ImportExportSection(viewModel: NutritionViewModel, modifier: Modifier = Modi
     var clipboardText by remember { mutableStateOf("") }
     var pasteInputVisible by remember { mutableStateOf(false) }
 
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+
     // SAF CreateDocument Launcher for Export
     val exportLauncher = rememberLauncherForActivityResult(
         contract = SafeCreateDocument("application/json")
     ) { uri ->
         if (uri != null) {
-            viewModel.exportLogs { jsonString ->
+            val jsonToWrite = pendingExportJson
+            if (jsonToWrite != null) {
                 coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     try {
                         context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                            outputStream.write(jsonString.toByteArray(Charsets.UTF_8))
+                            outputStream.write(jsonToWrite.toByteArray(Charsets.UTF_8))
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                    } finally {
+                        pendingExportJson = null
+                    }
+                }
+            } else {
+                // fallback
+                viewModel.exportLogs { jsonString ->
+                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                                outputStream.write(jsonString.toByteArray(Charsets.UTF_8))
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                     }
                 }
             }
@@ -3908,12 +3945,15 @@ fun ImportExportSection(viewModel: NutritionViewModel, modifier: Modifier = Modi
             ) {
                 Button(
                     onClick = {
-                        try {
-                            exportLauncher.launch("nutriscribe-journal-backup.json")
-                        } catch (e: ActivityNotFoundException) {
-                            Toast.makeText(context, "System File Picker not available. Please use 'Copy Code' under Portable Clipboard Backups instead.", Toast.LENGTH_LONG).show()
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        coroutineScope.launch {
+                            try {
+                                pendingExportJson = viewModel.getExportString()
+                                exportLauncher.launch("nutriscribe-journal-backup.json")
+                            } catch (e: ActivityNotFoundException) {
+                                Toast.makeText(context, "System File Picker not available. Please use 'Copy Code' under Portable Clipboard Backups instead.", Toast.LENGTH_LONG).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f).testTag("button_export_file"),
