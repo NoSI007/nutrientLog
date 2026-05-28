@@ -218,13 +218,6 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun selectDate(dateString: String) {
         _currentDate.value = dateString
-        viewModelScope.launch {
-            try {
-                repository.autoLogSupplementsForDate(dateString)
-            } catch (e: Exception) {
-                // Ignore silent logs
-            }
-        }
     }
 
     fun insertSupplement(name: String, dosage: String, frequency: String, daysOfWeek: String = "", timeOfDay: String = "Morning", notes: String = "") {
@@ -356,6 +349,51 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             } catch (e: Exception) {
                 _operationMessage.value = "Error: Use offline fallback estimates."
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun addBarcodeFoodLog(barcode: String, mealType: String) {
+        if (barcode.isBlank()) return
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val result = repository.parseAndLogBarcode(barcode, _currentDate.value, mealType)
+                if (result.isSuccess) {
+                    val entry = result.getOrNull()
+                    _operationMessage.value = "Scanned & Logged: ${entry?.foodName}"
+                } else {
+                    _operationMessage.value = "Failed to parse barcode. Logged backup estimate."
+                }
+            } catch (e: Exception) {
+                _operationMessage.value = "Scanning error. Used offline profile estimates."
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun addScannedSupplement(barcode: String) {
+        if (barcode.isBlank()) return
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val result = repository.parseAndRegisterScannedSupplement(barcode)
+                if (result.isSuccess) {
+                    val supplement = result.getOrNull()
+                    _operationMessage.value = "Scanned & Registered: ${supplement?.name}"
+                    try {
+                        repository.autoLogSupplementsForDate(_currentDate.value)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                } else {
+                    _operationMessage.value = "Failed to register scanned supplement."
+                }
+            } catch (e: Exception) {
+                _operationMessage.value = "Error parsing scanned supplement."
             } finally {
                 _isLoading.value = false
             }

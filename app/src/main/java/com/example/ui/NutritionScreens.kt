@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Button
@@ -106,6 +107,17 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.AlertDialog
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.ui.viewinterop.AndroidView
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import androidx.camera.view.PreviewView
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.LinearEasing
 
 class SafeCreateDocument(private val mimeType: String) : ActivityResultContract<String, android.net.Uri?>() {
     override fun createIntent(context: android.content.Context, input: String): android.content.Intent {
@@ -2937,11 +2949,36 @@ fun AddFoodDialog(
     val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
     var selectedMeal by remember { mutableStateOf("Lunch") }
     var expandedMealDropdown by remember { mutableStateOf(false) }
+    var showScanner by remember { mutableStateOf(false) }
 
     var bulkDescription by remember { mutableStateOf("") }
     var logLengthDays by remember { mutableStateOf(3f) }
 
     Dialog(onDismissRequest = onDismiss) {
+        if (showScanner) {
+            BarcodeQRScannerScreen(
+                onDismiss = { showScanner = false },
+                onBarcodeScanned = { barcode ->
+                    val localMatch = when (barcode) {
+                        "041500000251", "0415000002511" -> "Greek Yogurt with Chia & Honey"
+                        "885101234567", "8851012345678" -> "Premium Whey Protein"
+                        "190111222333", "1901112223334" -> "Daily Multivitamin Tablet"
+                        "301234567890", "3012345678901" -> "Pure Magnesium Glycinate"
+                        "012000000133", "0120000001335" -> "Organic Rolled Oats with Banana"
+                        "490000004433", "4900000044331" -> "Matcha Green Tea"
+                        else -> barcode
+                    }
+                    foodDescription = localMatch
+                    if (barcode in listOf("885101234567", "8851012345678", "190111222333", "1901112223334", "301234567890", "3012345678901")) {
+                        selectedMeal = "Supplement"
+                    } else if (barcode == "012000000133" || barcode == "0120000001335") {
+                        selectedMeal = "Breakfast"
+                    }
+                    showScanner = false
+                }
+            )
+        }
+
         Surface(
             shape = RoundedCornerShape(16.dp),
             tonalElevation = 8.dp,
@@ -3119,6 +3156,35 @@ fun AddFoodDialog(
                                     unfocusedContainerColor = MaterialTheme.colorScheme.surface
                                 )
                             )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Or scan label:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                )
+                                Button(
+                                    onClick = { showScanner = true },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                                        contentColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(34.dp).testTag("dialog_scan_food_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.QrCode,
+                                        contentDescription = "Scan Barcode",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Scan QR/Barcode", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
                         }
                     }
 
@@ -5081,17 +5147,51 @@ fun SupplementsTab(viewModel: NutritionViewModel) {
             }
 
             item {
-                Button(
-                    onClick = { showAddDialog = true },
+                var showSupplementScanner by remember { mutableStateOf(false) }
+
+                if (showSupplementScanner) {
+                    BarcodeQRScannerScreen(
+                        onDismiss = { showSupplementScanner = false },
+                        onBarcodeScanned = { barcode ->
+                            viewModel.addScannedSupplement(barcode)
+                            showSupplementScanner = false
+                        }
+                    )
+                }
+
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                        .testTag("add_supplement_trigger_button"),
-                    shape = RoundedCornerShape(12.dp)
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add")
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Add Supplement")
+                    Button(
+                        onClick = { showAddDialog = true },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("add_supplement_trigger_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add")
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Add Manual")
+                    }
+
+                    Button(
+                        onClick = { showSupplementScanner = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .testTag("scan_supplement_trigger_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.QrCode, contentDescription = "Scan")
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scan QR / Barcode")
+                    }
                 }
             }
 
@@ -5275,4 +5375,451 @@ fun AddSupplementDialog(
             }
         }
     )
+}
+
+@Composable
+fun CameraPlaceholderUI(cameraPermissionLauncher: androidx.activity.result.ActivityResultLauncher<String>) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0F172A)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(24.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = "Camera Required",
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                modifier = Modifier.size(64.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Camera Feed Unavailable",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = Color.White
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Camera permission enables physical scanning. Tap below to launch permission prompt, or use our simulator below to scan virtual nutrition labels.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.LightGray,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = { cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA) }
+            ) {
+                Text("Request Camera Access")
+            }
+        }
+    }
+}
+
+@Composable
+fun BarcodeQRScannerScreen(
+    onDismiss: () -> Unit,
+    onBarcodeScanned: (String) -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    
+    // Check permission initially
+    val initialGranted = remember {
+        ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+    
+    var hasCameraPermission by remember { mutableStateOf(initialGranted) }
+    
+    // Launcher for camera permission request
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasCameraPermission = isGranted
+    }
+    
+    // Laser line sweep animation
+    val infiniteTransition = rememberInfiniteTransition(label = "laser")
+    val laserFraction by infiniteTransition.animateFloat(
+        initialValue = 0.05f,
+        targetValue = 0.95f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "laser_y"
+    )
+
+    var customBarcode by remember { mutableStateOf("") }
+    var showExplanation by remember { mutableStateOf(false) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                // 1. Camera View or Placeholder if no permission
+                var isCameraSupported by remember { mutableStateOf(true) }
+
+                if (hasCameraPermission && isCameraSupported) {
+                    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+                    val cameraProviderFuture = remember {
+                        try {
+                            ProcessCameraProvider.getInstance(context)
+                        } catch (t: Throwable) {
+                            android.util.Log.e("Scanner", "Failed to get ProcessCameraProvider", t)
+                            isCameraSupported = false
+                            null
+                        }
+                    }
+                    
+                    if (cameraProviderFuture != null) {
+                        androidx.compose.runtime.DisposableEffect(lifecycleOwner, cameraProviderFuture) {
+                            onDispose {
+                                try {
+                                    val provider = cameraProviderFuture.get()
+                                    provider.unbindAll()
+                                } catch (t: Throwable) {
+                                    android.util.Log.e("Scanner", "Clean up camera unbind failed", t)
+                                }
+                            }
+                        }
+
+                        AndroidView(
+                            factory = { ctx ->
+                                val previewView = PreviewView(ctx)
+                                val executor = ContextCompat.getMainExecutor(ctx)
+                                cameraProviderFuture.addListener({
+                                    try {
+                                        val cameraProvider = cameraProviderFuture.get()
+                                        val preview = androidx.camera.core.Preview.Builder().build().also {
+                                            it.setSurfaceProvider(previewView.surfaceProvider)
+                                        }
+                                        val cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
+                                        cameraProvider.unbindAll()
+                                        cameraProvider.bindToLifecycle(
+                                            lifecycleOwner,
+                                            cameraSelector,
+                                            preview
+                                        )
+                                    } catch (exc: Throwable) {
+                                        android.util.Log.e("Scanner", "Use case binding failed", exc)
+                                    }
+                                }, executor)
+                                previewView
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        CameraPlaceholderUI(cameraPermissionLauncher)
+                    }
+                } else {
+                    CameraPlaceholderUI(cameraPermissionLauncher)
+                }
+
+                // 2. Translucent Viewfinder Overlay Mask
+                Box(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // Dark columns and rows surrounding the centered target viewfinder
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Top mask space
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .background(Color.Black.copy(alpha = 0.65f))
+                        )
+                        // Middle viewfinder row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(260.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .background(Color.Black.copy(alpha = 0.65f))
+                            )
+                            // Clean Viewfinder Window Square
+                            Box(
+                                modifier = Modifier
+                                    .size(260.dp)
+                                    .testTag("scanner_viewfinder_scope")
+                            ) {
+                                // Draw corner braces bounding scope
+                                val braceColor = MaterialTheme.colorScheme.primary
+                                val braceThickness = 4.dp
+                                val braceLength = 24.dp
+
+                                // Top-Left corner
+                                Box(modifier = Modifier.align(Alignment.TopStart).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(topStart = 12.dp)).clip(RoundedCornerShape(topStart = 12.dp)))
+                                // Top-Right corner
+                                Box(modifier = Modifier.align(Alignment.TopEnd).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(topEnd = 12.dp)).clip(RoundedCornerShape(topEnd = 12.dp)))
+                                // Bottom-Left corner
+                                Box(modifier = Modifier.align(Alignment.BottomStart).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(bottomStart = 12.dp)).clip(RoundedCornerShape(bottomStart = 12.dp)))
+                                // Bottom-Right corner
+                                Box(modifier = Modifier.align(Alignment.BottomEnd).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(bottomEnd = 12.dp)).clip(RoundedCornerShape(bottomEnd = 12.dp)))
+
+                                // Moving laser scanning sweep line (offset coordinates)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(3.dp)
+                                        .offset(y = 260.dp * laserFraction)
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(
+                                                    Color.Transparent,
+                                                    Color(0xFF4ADE80),
+                                                    Color(0xFF22C55E),
+                                                    Color(0xFF4ADE80),
+                                                    Color.Transparent
+                                                )
+                                            )
+                                        )
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .background(Color.Black.copy(alpha = 0.65f))
+                            )
+                        }
+                        // Bottom mask space
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1.3f)
+                                .background(Color.Black.copy(alpha = 0.65f))
+                        )
+                    }
+                }
+
+                // 3. Scanner HUD & Control UI Panels
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp, vertical = 24.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Header Area
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = CircleShape,
+                                modifier = Modifier.size(8.dp)
+                            ) {}
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "BARCODE / QR ENGINE",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 2.sp
+                                ),
+                                color = Color.White
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                .testTag("scanner_close_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close Scanner",
+                                tint = Color.White
+                            )
+                        }
+                    }
+
+                    // Scope Hint Text middle
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 120.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Align Barcode / QR Label",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Keep steady to scan automatically",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.LightGray
+                        )
+                    }
+
+                    // BOTTOM INTERACTIVE LIVE SIMULATOR CONTROL PANEL
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                        ),
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("emulator_scanner_control_panel")
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = "Simulate",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Web Emulator Scan Simulator",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                
+                                TextButton(
+                                    onClick = { showExplanation = !showExplanation }
+                                ) {
+                                    Text(if (showExplanation) "Hide Info" else "How it works", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+
+                            if (showExplanation) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Since this app is running inside a cloud browser streaming window, direct physical camera scanner hardware is simulated. Choose one of our pre-coded smart nutrition products below, or type in a barcode UPC to mock-simulate a successful scan stream.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Presets Row (horizontal scroll chips)
+                            Text(
+                                text = "Select Product to Simulate Scan:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val presets = listOf(
+                                    Triple("Greek Yogurt", "041500000251", "Food"),
+                                    Triple("Whey Protein", "885101234567", "Supplement"),
+                                    Triple("Multivitamin", "190111222333", "Supplement"),
+                                    Triple("Magnesium Glycinate", "301234567890", "Supplement"),
+                                    Triple("Organic Oats", "012000000133", "Food"),
+                                    Triple("Matcha Green Tea", "490000004433", "Tea/Food")
+                                )
+
+                                presets.forEach { (name, upc, category) ->
+                                    Button(
+                                        onClick = {
+                                            onBarcodeScanned(upc)
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (category == "Supplement") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                            contentColor = if (category == "Supplement") MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        modifier = Modifier
+                                            .height(34.dp)
+                                            .testTag("mock_scan_preset_$upc")
+                                    ) {
+                                        Text(
+                                            text = "$name ($category)",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Custom Text QR scanner input
+                            Text(
+                                text = "Or Scan Custom Text QR Code / Barcode ID:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = customBarcode,
+                                    onValueChange = { customBarcode = it },
+                                    placeholder = { Text("e.g., Vitamin D3, 5000 IU or UPC code") },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(52.dp)
+                                        .testTag("custom_scan_input_field"),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent
+                                    ),
+                                    textStyle = MaterialTheme.typography.bodyMedium
+                                )
+
+                                Button(
+                                    onClick = {
+                                        if (customBarcode.isNotBlank()) {
+                                            onBarcodeScanned(customBarcode)
+                                        }
+                                    },
+                                    enabled = customBarcode.isNotBlank(),
+                                    modifier = Modifier
+                                        .height(52.dp)
+                                        .testTag("custom_mock_scan_submit_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Scan"
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Log")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

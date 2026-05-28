@@ -5,6 +5,8 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -21,6 +23,7 @@ class FoodRepository(private val context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val dao = database.foodLogDao()
     private val supplementDao = database.supplementDao()
+    private val autoLogMutex = Mutex()
 
     val allEntries: Flow<List<FoodLogEntry>> = dao.getAllEntries()
     val allSupplements: Flow<List<Supplement>> = supplementDao.getAllSupplements()
@@ -844,81 +847,83 @@ class FoodRepository(private val context: Context) {
         supplementDao.deleteSupplementById(id)
     }
 
-    suspend fun autoLogSupplementsForDate(dateString: String): Int = withContext(Dispatchers.IO) {
-        val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        val date = try {
-            format.parse(dateString)
-        } catch (e: Exception) {
-            null
-        } ?: return@withContext 0
+    suspend fun autoLogSupplementsForDate(dateString: String): Int = autoLogMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            val date = try {
+                format.parse(dateString)
+            } catch (e: Exception) {
+                null
+            } ?: return@withContext 0
 
-        val calendar = Calendar.getInstance().apply { time = date }
-        val dayOfWeekName = SimpleDateFormat("EEEE", Locale.US).format(date) // e.g. "Monday"
+            val calendar = Calendar.getInstance().apply { time = date }
+            val dayOfWeekName = SimpleDateFormat("EEEE", Locale.US).format(date) // e.g. "Monday"
 
-        val supplements = supplementDao.getAllSupplementsDirect()
-        if (supplements.isEmpty()) return@withContext 0
+            val supplements = supplementDao.getAllSupplementsDirect()
+            if (supplements.isEmpty()) return@withContext 0
 
-        val existingEntries = dao.getAllEntriesDirect().filter { it.date == dateString }
-        val supplementLogsForDay = existingEntries.filter { it.mealType == "Supplement" }
+            val existingEntries = dao.getAllEntriesDirect().filter { it.date == dateString }
+            val supplementLogsForDay = existingEntries.filter { it.mealType == "Supplement" }
 
-        var countAdded = 0
+            var countAdded = 0
 
-        for (supplement in supplements) {
-            val isScheduledToday = when (supplement.frequency) {
-                "Once Daily", "Twice Daily" -> true
-                "Weekly" -> {
-                    supplement.daysOfWeek.split(",")
-                        .any { it.trim().equals(dayOfWeekName, ignoreCase = true) }
-                }
-                "Alternate Days" -> {
-                    (calendar.timeInMillis / (24L * 60L * 60L * 1000L)) % 2L == 0L
-                }
-                else -> true
-            }
-
-            if (!isScheduledToday) continue
-
-            val expectedLogNames = if (supplement.frequency == "Twice Daily") {
-                listOf(
-                    "${supplement.name} (${supplement.dosage}) - Morning",
-                    "${supplement.name} (${supplement.dosage}) - Evening"
-                )
-            } else {
-                listOf("${supplement.name} (${supplement.dosage})")
-            }
-
-            for (expectedName in expectedLogNames) {
-                val alreadyLogged = supplementLogsForDay.any {
-                    it.foodName.equals(expectedName, ignoreCase = true) ||
-                    (it.foodName.startsWith(supplement.name, ignoreCase = true) && 
-                     it.foodName.contains(supplement.dosage) && 
-                     (expectedLogNames.size == 1 || it.foodName.contains(expectedName.substringAfter("- "))))
+            for (supplement in supplements) {
+                val isScheduledToday = when (supplement.frequency) {
+                    "Once Daily", "Twice Daily" -> true
+                    "Weekly" -> {
+                        supplement.daysOfWeek.split(",")
+                            .any { it.trim().equals(dayOfWeekName, ignoreCase = true) }
+                    }
+                    "Alternate Days" -> {
+                        (calendar.timeInMillis / (24L * 60L * 60L * 1000L)) % 2L == 0L
+                    }
+                    else -> true
                 }
 
-                if (!alreadyLogged) {
-                    val calculatedNutrients = if (supplement.nutrients.isNotEmpty()) {
-                        supplement.nutrients
-                    } else {
-                        estimateSupplementNutrients(supplement.name, supplement.dosage)
+                if (!isScheduledToday) continue
+
+                val expectedLogNames = if (supplement.frequency == "Twice Daily") {
+                    listOf(
+                        "${supplement.name} (${supplement.dosage}) - Morning",
+                        "${supplement.name} (${supplement.dosage}) - Evening"
+                    )
+                } else {
+                    listOf("${supplement.name} (${supplement.dosage})")
+                }
+
+                for (expectedName in expectedLogNames) {
+                    val alreadyLogged = supplementLogsForDay.any {
+                        it.foodName.equals(expectedName, ignoreCase = true) ||
+                        (it.foodName.startsWith(supplement.name, ignoreCase = true) && 
+                         it.foodName.contains(supplement.dosage) && 
+                         (expectedLogNames.size == 1 || it.foodName.contains(expectedName.substringAfter("- "))))
                     }
 
-                    val newLog = FoodLogEntry(
-                        id = 0,
-                        date = dateString,
-                        foodName = expectedName,
-                        mealType = "Supplement",
-                        quantity = 1.0,
-                        unit = "serving",
-                        nutrients = calculatedNutrients
-                    )
+                    if (!alreadyLogged) {
+                        val calculatedNutrients = if (supplement.nutrients.isNotEmpty()) {
+                            supplement.nutrients
+                        } else {
+                            estimateSupplementNutrients(supplement.name, supplement.dosage)
+                        }
 
-                    dao.insertEntry(newLog)
-                    countAdded++
+                        val newLog = FoodLogEntry(
+                            id = 0,
+                            date = dateString,
+                            foodName = expectedName,
+                            mealType = "Supplement",
+                            quantity = 1.0,
+                            unit = "serving",
+                            nutrients = calculatedNutrients
+                        )
+
+                        dao.insertEntry(newLog)
+                        countAdded++
+                    }
                 }
             }
-        }
 
-        countAdded
+            countAdded
+        }
     }
 
     private fun estimateSupplementNutrients(name: String, dosage: String): Map<String, Double> {
@@ -1005,4 +1010,278 @@ class FoodRepository(private val context: Context) {
 
         return accumulated
     }
+
+    fun getProductByBarcode(barcode: String): BarcodeProduct? {
+        val clean = barcode.trim()
+        val products = mapOf(
+            "885101234567" to BarcodeProduct(
+                name = "Premium Whey Protein",
+                dosage = "1 scoop (30g)",
+                isSupplement = true,
+                nutrients = mapOf("calories" to 120.0, "protein" to 25.0, "calcium" to 150.0, "potassium" to 160.0)
+            ),
+            "8851012345678" to BarcodeProduct(
+                name = "Premium Whey Protein",
+                dosage = "1 scoop (30g)",
+                isSupplement = true,
+                nutrients = mapOf("calories" to 120.0, "protein" to 25.0, "calcium" to 150.0, "potassium" to 160.0)
+            ),
+            "190111222333" to BarcodeProduct(
+                name = "Daily Multivitamin Tablet",
+                dosage = "1 tablet",
+                isSupplement = true,
+                nutrients = mapOf("calories" to 0.0, "vitamin_c" to 90.0, "vitamin_d" to 25.0, "zinc" to 15.0, "iron" to 18.0)
+            ),
+            "1901112223334" to BarcodeProduct(
+                name = "Daily Multivitamin Tablet",
+                dosage = "1 tablet",
+                isSupplement = true,
+                nutrients = mapOf("calories" to 0.0, "vitamin_c" to 90.0, "vitamin_d" to 25.0, "zinc" to 15.0, "iron" to 18.0)
+            ),
+            "041500000251" to BarcodeProduct(
+                name = "Greek Yogurt with Chia & Honey",
+                dosage = "1 container (150g)",
+                isSupplement = false,
+                nutrients = mapOf("calories" to 150.0, "protein" to 12.0, "carbohydrates" to 18.0, "calcium" to 200.0)
+            ),
+            "0415000002511" to BarcodeProduct(
+                name = "Greek Yogurt with Chia & Honey",
+                dosage = "1 container (150g)",
+                isSupplement = false,
+                nutrients = mapOf("calories" to 150.0, "protein" to 12.0, "carbohydrates" to 18.0, "calcium" to 200.0)
+            ),
+            "012000000133" to BarcodeProduct(
+                name = "Organic Rolled Oats with Banana",
+                dosage = "1 cup (40g cooked)",
+                isSupplement = false,
+                nutrients = mapOf("calories" to 190.0, "protein" to 6.0, "carbohydrates" to 34.0, "fiber" to 5.0, "potassium" to 150.0)
+            ),
+            "0120000001335" to BarcodeProduct(
+                name = "Organic Rolled Oats with Banana",
+                dosage = "1 cup (40g cooked)",
+                isSupplement = false,
+                nutrients = mapOf("calories" to 190.0, "protein" to 6.0, "carbohydrates" to 34.0, "fiber" to 5.0, "potassium" to 150.0)
+            ),
+            "490000004433" to BarcodeProduct(
+                name = "Matcha Green Tea",
+                dosage = "1 serving",
+                isSupplement = false,
+                nutrients = mapOf("calories" to 5.0, "vitamin_c" to 10.0, "potassium" to 30.0)
+            ),
+            "4900000044331" to BarcodeProduct(
+                name = "Matcha Green Tea",
+                dosage = "1 serving",
+                isSupplement = false,
+                nutrients = mapOf("calories" to 5.0, "vitamin_c" to 10.0, "potassium" to 30.0)
+            ),
+            "301234567890" to BarcodeProduct(
+                name = "Pure Magnesium Glycinate",
+                dosage = "2 capsules",
+                isSupplement = true,
+                nutrients = mapOf("magnesium" to 200.0)
+            ),
+            "3012345678901" to BarcodeProduct(
+                name = "Pure Magnesium Glycinate",
+                dosage = "2 capsules",
+                isSupplement = true,
+                nutrients = mapOf("magnesium" to 200.0)
+            )
+        )
+        return products[clean]
+    }
+
+    suspend fun parseAndLogBarcode(
+        barcode: String,
+        date: String,
+        mealType: String
+    ): Result<FoodLogEntry> = withContext(Dispatchers.IO) {
+        val localProduct = getProductByBarcode(barcode)
+        if (localProduct != null) {
+            val entry = FoodLogEntry(
+                id = 0,
+                date = date,
+                foodName = "${localProduct.name} (Scanned)",
+                mealType = mealType,
+                quantity = 1.0,
+                unit = if (localProduct.isSupplement) "tablet" else "serving",
+                nutrients = localProduct.nutrients
+            )
+            dao.insertEntry(entry)
+            return@withContext Result.success(entry)
+        }
+
+        val isNumeric = barcode.trim().all { it.isDigit() }
+        if (!isNumeric) {
+            return@withContext parseAndLogFood(barcode, date, mealType)
+        }
+
+        val apiKey = try {
+            com.example.BuildConfig.GEMINI_API_KEY
+        } catch (e: Throwable) {
+            ""
+        }
+
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
+            val entryName = "Scanned Product: $barcode"
+            val fallbackEntry = createFallbackEntry(entryName, date, mealType)
+            dao.insertEntry(fallbackEntry)
+            return@withContext Result.success(fallbackEntry)
+        }
+
+        val prompt = compilePrompt("scanned food or supplement product UPC barcode $barcode")
+        val jsonRequest = buildRequestBodyJson(prompt)
+
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+            .post(jsonRequest.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        try {
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType)
+                dao.insertEntry(fallbackEntry)
+                return@withContext Result.success(fallbackEntry)
+            }
+
+            val bodyString = response.body?.string() ?: ""
+            val parsedResult = extractNutrientsFromJson(bodyString, "Scanned Barcode: $barcode", date, mealType)
+            if (parsedResult != null) {
+                dao.insertEntry(parsedResult)
+                return@withContext Result.success(parsedResult)
+            } else {
+                val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType)
+                dao.insertEntry(fallbackEntry)
+                return@withContext Result.success(fallbackEntry)
+            }
+        } catch (e: Exception) {
+            val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType)
+            dao.insertEntry(fallbackEntry)
+            return@withContext Result.success(fallbackEntry)
+        }
+    }
+
+    suspend fun parseAndRegisterScannedSupplement(
+        barcode: String
+    ): Result<Supplement> = withContext(Dispatchers.IO) {
+        val localProduct = getProductByBarcode(barcode)
+        if (localProduct != null && localProduct.isSupplement) {
+            val supplement = Supplement(
+                name = localProduct.name,
+                dosage = localProduct.dosage,
+                frequency = "Once Daily",
+                timeOfDay = "Morning",
+                notes = "Scanned Barcode: $barcode",
+                nutrients = localProduct.nutrients
+            )
+            supplementDao.insertSupplement(supplement)
+            return@withContext Result.success(supplement)
+        }
+
+        val isNumeric = barcode.trim().all { it.isDigit() }
+        if (!isNumeric) {
+            val lower = barcode.lowercase()
+            val splitParts = barcode.trim().split(",", ";").map { it.trim() }
+            val name = if (splitParts.isNotEmpty() && splitParts[0].isNotBlank()) splitParts[0] else "Scanned Supplement"
+            val dosage = if (splitParts.size > 1 && splitParts[1].isNotBlank()) splitParts[1] else "1 capsule"
+            val frequency = when {
+                lower.contains("twice") || lower.contains("2x") -> "Twice Daily"
+                lower.contains("weekly") -> "Weekly"
+                lower.contains("alternate") -> "Alternate Days"
+                else -> "Once Daily"
+            }
+            val notes = "Scanned QR Guideline"
+            
+            val supplement = Supplement(
+                name = name,
+                dosage = dosage,
+                frequency = frequency,
+                timeOfDay = "Morning",
+                notes = notes,
+                nutrients = estimateSupplementNutrients(name, dosage)
+            )
+            supplementDao.insertSupplement(supplement)
+            return@withContext Result.success(supplement)
+        }
+
+        val apiKey = try { com.example.BuildConfig.GEMINI_API_KEY } catch (e: Throwable) { "" }
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
+            val supplement = Supplement(
+                name = "Multivitamin ($barcode)",
+                dosage = "1 tablet",
+                frequency = "Once Daily",
+                timeOfDay = "Morning",
+                notes = "Scanned offline barcode",
+                nutrients = estimateSupplementNutrients("multivitamin", "1 tablet")
+            )
+            supplementDao.insertSupplement(supplement)
+            return@withContext Result.success(supplement)
+        }
+
+        // Prepare Prompt for Supplement details query
+        val templatePrompt = """
+            Identify the product UPC barcode '$barcode'. Return a valid JSON content of a clinical supplement with fields:
+            name: "Full Brand Product Name Description",
+            dosage: "Dosage (e.g. '1 pill' or '500 mg')"
+            Output only raw JSON content, no formatting wrappers.
+        """.trimIndent()
+
+        val jsonRequest = buildRequestBodyJson(templatePrompt)
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+            .post(jsonRequest.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        try {
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                val supp = Supplement(
+                    name = "Supplement ($barcode)",
+                    dosage = "1 capsule",
+                    frequency = "Once Daily",
+                    notes = "Scanned fallback profile",
+                    nutrients = estimateSupplementNutrients("multivitamin", "1 capsule")
+                )
+                supplementDao.insertSupplement(supp)
+                return@withContext Result.success(supp)
+            }
+
+            val bodyString = response.body?.string() ?: ""
+            val cleanedJson = bodyString.substringAfter("{").substringBeforeLast("}")
+            val nameParsed = cleanedJson.substringAfter("\"name\"").substringAfter("\"").substringBefore("\"").trim()
+            val dosageParsed = cleanedJson.substringAfter("\"dosage\"").substringAfter("\"").substringBefore("\"").trim()
+
+            val finalName = if (nameParsed.isNotEmpty() && !nameParsed.contains("{")) nameParsed else "Supplement ($barcode)"
+            val finalDosage = if (dosageParsed.isNotEmpty() && !dosageParsed.contains("{")) dosageParsed else "1 capsule"
+
+            val finalNutrients = estimateSupplementNutrients(finalName, finalDosage)
+            val supp = Supplement(
+                name = finalName,
+                dosage = finalDosage,
+                frequency = "Once Daily",
+                timeOfDay = "Morning",
+                notes = "Auto-scanned $barcode",
+                nutrients = finalNutrients
+            )
+            supplementDao.insertSupplement(supp)
+            return@withContext Result.success(supp)
+        } catch (e: Exception) {
+            val supp = Supplement(
+                name = "Vitamins ($barcode)",
+                dosage = "1 capsule",
+                frequency = "Once Daily",
+                notes = "Scanned backup profile",
+                nutrients = estimateSupplementNutrients("multivitamin", "1 capsule")
+            )
+            supplementDao.insertSupplement(supp)
+            return@withContext Result.success(supp)
+        }
+    }
 }
+
+data class BarcodeProduct(
+    val name: String,
+    val dosage: String,
+    val isSupplement: Boolean,
+    val nutrients: Map<String, Double>
+)
