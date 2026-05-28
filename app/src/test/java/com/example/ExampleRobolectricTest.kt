@@ -38,5 +38,29 @@ class ExampleRobolectricTest {
     }
     composeTestRule.waitForIdle()
   }
+
+  @Test
+  fun `test adding and auto logging supplements works without crash`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val viewModel = NutritionViewModel(context as Application)
+    
+    // Core VM functions check
+    viewModel.insertSupplement(
+      name = "Omega 3 Fish Oil",
+      dosage = "1000 mg",
+      frequency = "Once Daily",
+      notes = "Take with breakfast"
+    )
+    
+    // Auto logging runs
+    viewModel.triggerAutoLog()
+    
+    composeTestRule.setContent {
+      MyApplicationTheme {
+        NutritionTrackerMainScreen(viewModel = viewModel)
+      }
+    }
+    composeTestRule.waitForIdle()
+  }
 }
 
