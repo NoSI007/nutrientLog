@@ -6,10 +6,11 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
-@Database(entities = [FoodLogEntry::class], version = 2, exportSchema = false)
+@Database(entities = [FoodLogEntry::class, Supplement::class], version = 3, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun foodLogDao(): FoodLogDao
+    abstract fun supplementDao(): SupplementDao
 
     companion object {
         @Volatile

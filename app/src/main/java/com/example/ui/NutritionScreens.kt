@@ -64,6 +64,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
@@ -101,6 +102,10 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 import androidx.activity.result.contract.ActivityResultContract
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.AlertDialog
 
 class SafeCreateDocument(private val mimeType: String) : ActivityResultContract<String, android.net.Uri?>() {
     override fun createIntent(context: android.content.Context, input: String): android.content.Intent {
@@ -214,7 +219,7 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
                         }
                     }
 
-                    // Date quick switcher bar
+                    // Date quick switcher bar - styled with distinctive tactile borders for clear interaction
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -230,11 +235,11 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(
                                         if (isSelected) MaterialTheme.colorScheme.primaryContainer
-                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
                                     )
                                     .border(
-                                        width = 1.dp,
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        width = if (isSelected) 2.dp else 1.dp,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
                                         shape = RoundedCornerShape(8.dp)
                                     )
                                     .clickable { viewModel.selectDate(dateStr) }
@@ -266,63 +271,229 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
                         }
                     }
 
-                    // Navigation Tabs
-                    TabRow(
+                    // Navigation Tabs - styled like premium visual tabs with rounded borders and background container pills
+                    ScrollableTabRow(
                         selectedTabIndex = selectedTab,
                         containerColor = Color.Transparent,
                         contentColor = MaterialTheme.colorScheme.primary,
+                        edgePadding = 0.dp,
                         indicator = { tabPositions ->
-                            TabRowDefaults.SecondaryIndicator(
-                                Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            // Custom indicators hidden or replaced to rely purely on the full-bordered capsule pill button style
                         }
                     ) {
                         Tab(
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
-                            modifier = Modifier.testTag("tab_dashboard"),
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selectedTab == 0) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                )
+                                .border(
+                                    width = if (selectedTab == 0) 1.5.dp else 1.dp,
+                                    color = if (selectedTab == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .testTag("tab_dashboard"),
                             text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Home, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Dashboard")
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Home,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (selectedTab == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Dashboard",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 0) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         )
                         Tab(
                             selected = selectedTab == 1,
                             onClick = { selectedTab = 1 },
-                            modifier = Modifier.testTag("tab_journal"),
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selectedTab == 1) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                )
+                                .border(
+                                    width = if (selectedTab == 1) 1.5.dp else 1.dp,
+                                    color = if (selectedTab == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .testTag("tab_journal"),
                             text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Log Journal")
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.List,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (selectedTab == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Log Journal",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 1) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         )
                         Tab(
                             selected = selectedTab == 2,
                             onClick = { selectedTab = 2 },
-                            modifier = Modifier.testTag("tab_reports"),
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selectedTab == 2) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                )
+                                .border(
+                                    width = if (selectedTab == 2) 1.5.dp else 1.dp,
+                                    color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .testTag("tab_reports"),
                             text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Reports & Trends")
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Reports & Trends",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 2) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         )
                         Tab(
                             selected = selectedTab == 3,
                             onClick = { selectedTab = 3 },
-                            modifier = Modifier.testTag("tab_nutrients"),
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selectedTab == 3) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                )
+                                .border(
+                                    width = if (selectedTab == 3) 1.5.dp else 1.dp,
+                                    color = if (selectedTab == 3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .testTag("tab_nutrients"),
                             text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("RDA 41 Directory")
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.List,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (selectedTab == 3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "RDA 41 Directory",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 3) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        )
+                        Tab(
+                            selected = selectedTab == 4,
+                            onClick = { selectedTab = 4 },
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selectedTab == 4) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                )
+                                .border(
+                                    width = if (selectedTab == 4) 1.5.dp else 1.dp,
+                                    color = if (selectedTab == 4) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .testTag("tab_observations"),
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (selectedTab == 4) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Observation Log",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 4) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        )
+                        Tab(
+                            selected = selectedTab == 5,
+                            onClick = { selectedTab = 5 },
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 6.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (selectedTab == 5) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                )
+                                .border(
+                                    width = if (selectedTab == 5) 1.5.dp else 1.dp,
+                                    color = if (selectedTab == 5) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .testTag("tab_supplements"),
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (selectedTab == 5) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Supplements",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (selectedTab == 5) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         )
@@ -360,6 +531,8 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
                 1 -> JournalTab(viewModel)
                 2 -> PeriodicReportsTab(viewModel)
                 3 -> NutrientsListTab(viewModel)
+                4 -> ObservationsTab(viewModel)
+                5 -> SupplementsTab(viewModel)
             }
 
             if (isLoading) {
@@ -1192,7 +1365,7 @@ fun MacroIndicator(label: String, grams: Double, calories: Double, percent: Doub
 fun JournalTab(viewModel: NutritionViewModel) {
     val entries by viewModel.currentDateEntries.collectAsState()
     val currentDate by viewModel.currentDate.collectAsState()
-    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack")
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
     var editingEntry by remember { mutableStateOf<FoodLogEntry?>(null) }
     var showCopyDialog by remember { mutableStateOf(false) }
 
@@ -1408,28 +1581,40 @@ fun JournalTab(viewModel: NutritionViewModel) {
                                                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                                         color = MaterialTheme.colorScheme.primary
                                                     )
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    IconButton(
-                                                        onClick = { editingEntry = entry },
-                                                        modifier = Modifier.testTag("edit_food_button_${entry.id}")
+                                                    Spacer(modifier = Modifier.width(12.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(36.dp)
+                                                            .clip(CircleShape)
+                                                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
+                                                            .border(1.2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                                                            .clickable { editingEntry = entry }
+                                                            .testTag("edit_food_button_${entry.id}"),
+                                                        contentAlignment = Alignment.Center
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.Default.Edit,
                                                             contentDescription = "Edit entry",
                                                             tint = MaterialTheme.colorScheme.primary,
-                                                            modifier = Modifier.size(18.dp)
+                                                            modifier = Modifier.size(16.dp)
                                                         )
                                                     }
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    IconButton(
-                                                        onClick = { viewModel.deleteLog(entry) },
-                                                        modifier = Modifier.testTag("delete_food_button_${entry.id}")
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(36.dp)
+                                                            .clip(CircleShape)
+                                                            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f))
+                                                            .border(1.2.dp, MaterialTheme.colorScheme.error, CircleShape)
+                                                            .clickable { viewModel.deleteLog(entry) }
+                                                            .testTag("delete_food_button_${entry.id}"),
+                                                        contentAlignment = Alignment.Center
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.Default.Delete,
                                                             contentDescription = "Delete entry",
                                                             tint = MaterialTheme.colorScheme.error,
-                                                            modifier = Modifier.size(18.dp)
+                                                            modifier = Modifier.size(16.dp)
                                                         )
                                                     }
                                                 }
@@ -2416,7 +2601,9 @@ fun NutrientsListTab(viewModel: NutritionViewModel) {
             },
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
-                unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f)
             )
         )
 
@@ -2747,7 +2934,7 @@ fun AddFoodDialog(
 ) {
     var isMultiDayMode by remember { mutableStateOf(false) }
     var foodDescription by remember { mutableStateOf("") }
-    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack")
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
     var selectedMeal by remember { mutableStateOf("Lunch") }
     var expandedMealDropdown by remember { mutableStateOf(false) }
 
@@ -2825,20 +3012,52 @@ fun AddFoodDialog(
                         modifier = Modifier.padding(bottom = 12.dp)
                     )
 
-                    OutlinedTextField(
-                        value = bulkDescription,
-                        onValueChange = { bulkDescription = it },
-                        label = { Text("Food Journal (Multiple Days)") },
-                        placeholder = { Text("e.g.\nYesterday Breakfast: eggs and bacon\nYesterday Lunch: grilled salmon\nToday Lunch: turkey sandwich") },
+                    // Distinct heavy bordered Card surrounding the Command Input Area for Batch Logging
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(130.dp)
-                            .testTag("bulk_food_input_field"),
-                        maxLines = 8,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
+                            .padding(vertical = 4.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.15f)
+                        ),
+                        border = BorderStroke(2.dp, MaterialTheme.colorScheme.tertiary)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Batch Command",
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Batch AI Command Parser Input",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+                            }
+                            OutlinedTextField(
+                                value = bulkDescription,
+                                onValueChange = { bulkDescription = it },
+                                placeholder = { Text("e.g.\nYesterday Breakfast: eggs and bacon\nYesterday Lunch: grilled salmon\nToday Lunch: turkey sandwich") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(130.dp)
+                                    .testTag("bulk_food_input_field"),
+                                maxLines = 8,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.tertiary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                )
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -2856,21 +3075,52 @@ fun AddFoodDialog(
                     )
 
                 } else {
-                    // Description Input
-                    OutlinedTextField(
-                        value = foodDescription,
-                        onValueChange = { foodDescription = it },
-                        label = { Text("What did you eat?") },
-                        placeholder = { Text("e.g., 1 medium banana and a cup of yogurt") },
+                    // Distinct heavy bordered Card surrounding the Command Input Area for Single Meal Logging
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(100.dp)
-                            .testTag("food_input_field"),
-                        maxLines = 4,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
+                            .padding(vertical = 4.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                        ),
+                        border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Single Command",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "AI Command Parser Input",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            OutlinedTextField(
+                                value = foodDescription,
+                                onValueChange = { foodDescription = it },
+                                placeholder = { Text("e.g., 1 medium banana and a cup of yogurt") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(100.dp)
+                                    .testTag("food_input_field"),
+                                maxLines = 4,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                )
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -2955,7 +3205,7 @@ fun EditFoodDialog(
     onConfirmReanalyze: (Int, String, String, String) -> Unit
 ) {
     var foodName by remember { mutableStateOf(entry.foodName) }
-    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack")
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
     var selectedMeal by remember { mutableStateOf(entry.mealType) }
     var expandedMealDropdown by remember { mutableStateOf(false) }
     var quantity by remember { mutableStateOf(entry.quantity) }
@@ -2993,17 +3243,48 @@ fun EditFoodDialog(
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
 
-                // Food Description input
-                OutlinedTextField(
-                    value = foodName,
-                    onValueChange = { foodName = it },
-                    label = { Text("Food Description (AI Source)") },
-                    modifier = Modifier.fillMaxWidth().testTag("edit_food_name_input"),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary
-                    )
-                )
+                // Distinct heavy bordered Card surrounding the Command Input Area for Editing Log
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                    ),
+                    border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit Command",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Edit AI Command Parser Input",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        OutlinedTextField(
+                            value = foodName,
+                            onValueChange = { foodName = it },
+                            modifier = Modifier.fillMaxWidth().testTag("edit_food_name_input"),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                            )
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -4063,4 +4344,935 @@ fun ImportExportSection(viewModel: NutritionViewModel, modifier: Modifier = Modi
             }
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun ObservationsTab(viewModel: NutritionViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val selectedKey by viewModel.selectedObservationNutrientKey.collectAsState()
+    val limitDays by viewModel.observationDaysLimit.collectAsState()
+    val observations by viewModel.nutrientObservations.collectAsState()
+    val customRdaOverrides by viewModel.customRdaOverrides.collectAsState()
+
+    val currentDef = remember(selectedKey) { Nutrients.getByKey(selectedKey) } ?: Nutrients.DEFINITIONS.first()
+    val expectedVal = customRdaOverrides[selectedKey] ?: currentDef.rda
+
+    // Compute running totals for the given period
+    val totalExpected = remember(observations) { observations.sumOf { it.expected } }
+    val totalAchieved = remember(observations) { observations.sumOf { it.achieved } }
+    val totalDiff = remember(observations) { observations.sumOf { it.difference } }
+    val fastingDays = remember(observations) { observations.count { it.isFasting } }
+    val feastingDays = remember(observations) { observations.count { !it.isFasting } }
+
+    var dropdownExpanded by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .testTag("observations_tab_container"),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. Header & Title Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Observations Icon",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Nutrient Observation Log",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Tracks expected vs achieved intakes over a configurable duration. Labeled as Fasting if below RDA and Feasting if reached or exceeded.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // 2. Configuration & Selectors Panel
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "Observation Configuration",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    // EXPOSED DROPDOWN MENU FOR NUTRIENTS GROUP SELECTION
+                    Column {
+                        Text(
+                            text = "Select Nutrient to Analyze",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                        ExposedDropdownMenuBox(
+                            expanded = dropdownExpanded,
+                            onExpandedChange = { dropdownExpanded = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = "${currentDef.name} (${currentDef.unit}) - Target: ${expectedVal.toInt()} ${currentDef.unit}",
+                                onValueChange = {},
+                                readOnly = true,
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded) },
+                                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                                modifier = Modifier
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
+                                    .fillMaxWidth()
+                                    .testTag("nutrient_select_textfield")
+                            )
+                            ExposedDropdownMenu(
+                                expanded = dropdownExpanded,
+                                onDismissRequest = { dropdownExpanded = false }
+                            ) {
+                                Nutrients.DEFINITIONS.forEach { def ->
+                                    val rda = customRdaOverrides[def.key] ?: def.rda
+                                    DropdownMenuItem(
+                                        text = { Text("${def.name} (${def.unit}) - Target: ${rda.toInt()}") },
+                                        onClick = {
+                                            viewModel.selectObservationNutrient(def.key)
+                                            dropdownExpanded = false
+                                        },
+                                        modifier = Modifier.testTag("dropdown_item_${def.key}")
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // PERIOD DAYS LIMIT CONTROLLER
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Observation Period History Limit",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                                Text(
+                                    text = "Set limit for running total tracks",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = "$limitDays Days",
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        // Slider control for exact adjustments (1 to 90 days, defaulting to 30)
+                        Slider(
+                            value = limitDays.toFloat(),
+                            onValueChange = { viewModel.updateObservationDaysLimit(it.toInt()) },
+                            valueRange = 1f..90f,
+                            steps = 89,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("observation_limit_slider")
+                        )
+
+                        // Stepper presets to quickly jump values
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(7, 14, 30, 45, 60, 90).forEach { days ->
+                                val isSelected = limitDays == days
+                                OutlinedButton(
+                                    onClick = { viewModel.updateObservationDaysLimit(days) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp)
+                                        .testTag("stepper_preset_$days"),
+                                    contentPadding = PaddingValues(0.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                                        contentColor = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.primary
+                                    ),
+                                    border = BorderStroke(
+                                        width = 1.dp,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                    )
+                                ) {
+                                    Text(
+                                        text = "${days}d",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Overall Cumulative Totals Card (Running Period Totals)
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                ),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Cumulative Period Running Totals",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // 3-way Grid of stats
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Expected Total
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("Total Expected", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "${String.format(Locale.US, "%.1f", totalExpected)} ${currentDef.unit}",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+
+                        // Achieved Total
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("Total Achieved", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "${String.format(Locale.US, "%.1f", totalAchieved)} ${currentDef.unit}",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+
+                        // Net Difference Total
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("Net Total Diff (D)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                val sign = if (totalDiff >= 0) "+" else ""
+                                Text(
+                                    text = "$sign${String.format(Locale.US, "%.1f", totalDiff)} ${currentDef.unit}",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = if (totalDiff >= 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
+                    // Fasting vs Feasting count summaries
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Fasting days counter
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f))
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.error)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Fasting: $fastingDays Days",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+
+                        // Feasting days counter
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFE0F2F1))
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF00796B))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Feasting: $feastingDays Days",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFF004D40)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Observation Table Daily Header
+        item {
+            Column {
+                Text(
+                    text = "Daily Tracker Timeline",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                // Standard desktop/tablet table headers styled as a beautiful sticky header equivalent
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 10.dp, horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "DATE",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.weight(1.8f)
+                        )
+                        Text(
+                            text = "ACHIEVED",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.weight(1.2f),
+                            textAlign = TextAlign.End
+                        )
+                        Text(
+                            text = "DIFF (D)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.weight(1.3f),
+                            textAlign = TextAlign.End
+                        )
+                        Text(
+                            text = "STATUS",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.weight(1.4f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        }
+
+        // 5. Daily Observations List Rows
+        if (observations.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "No logs",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            "No log data within this observation range. Log some food to run metrics!",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        } else {
+            items(observations) { obs ->
+                // Row card containing the metrics for each day
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("observation_row_${obs.dateString}"),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp, horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Date column
+                        Column(modifier = Modifier.weight(1.8f)) {
+                            Text(
+                                text = obs.displayDate,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Running T.: ${String.format(Locale.US, "%.1f", obs.runningTotalDiff)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        // Achieved / Expected column
+                        Column(
+                            modifier = Modifier.weight(1.2f),
+                            horizontalAlignment = Alignment.End
+                        ) {
+                            Text(
+                                text = "${obs.achieved.toInt()}",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "/ ${obs.expected.toInt()}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        // Target Difference Column
+                        val sign = if (obs.difference >= 0) "+" else ""
+                        Column(
+                            modifier = Modifier.weight(1.3f),
+                            horizontalAlignment = Alignment.End
+                        ) {
+                            Text(
+                                text = "$sign${String.format(Locale.US, "%.1f", obs.difference)}",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = if (obs.difference >= 0) MaterialTheme.colorScheme.error else Color(0xFF00796B)
+                            )
+                            Text(
+                                text = currentDef.unit,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        // Status Badge Pill
+                        Box(
+                            modifier = Modifier
+                                .weight(1.4f)
+                                .padding(start = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val badgeBg = if (obs.isFasting) MaterialTheme.colorScheme.errorContainer else Color(0xFFE0F2F1)
+                            val badgeTextColor = if (obs.isFasting) MaterialTheme.colorScheme.onErrorContainer else Color(0xFF004D40)
+                            val statusLabelTxt = if (obs.isFasting) "Fasting" else "Feasting"
+
+                            Surface(
+                                color = badgeBg,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("status_badge_${obs.dateString}")
+                            ) {
+                                Text(
+                                    text = statusLabelTxt,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = badgeTextColor,
+                                    modifier = Modifier.padding(vertical = 4.dp),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Added some padding spacer at bottom of table
+        item {
+            Spacer(modifier = Modifier.height(30.dp))
+        }
+    }
+}
+
+@Composable
+fun SupplementsTab(viewModel: NutritionViewModel) {
+    val supplements by viewModel.allSupplements.collectAsState()
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .testTag("supplements_tab_container")
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                // Header card
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Daily Supplements Scheduler",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Register active vitamins, minerals, or other clinical supplements. When active, they automatically sync and pre-fill your nutrition calendar targets on their scheduled days.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Your Supplement Regiment",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+                    Button(
+                        onClick = { viewModel.triggerAutoLog() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        ),
+                        modifier = Modifier.testTag("sync_supplements_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Sync Now",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Sync Today", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+
+            if (supplements.isEmpty()) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "No Supplements Registered Yet",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Click the 'Add Supplement' button below to configure your first daily dosage guidelines.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(supplements) { supplement ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("supplement_card_${supplement.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Icon indicators
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = CircleShape,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Pill icon",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1.0f)) {
+                                Text(
+                                    text = supplement.name,
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = supplement.dosage,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = supplement.frequency,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                if (supplement.frequency == "Weekly" && supplement.daysOfWeek.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "On days: ${supplement.daysOfWeek}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+
+                                if (supplement.notes.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Note: ${supplement.notes}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { viewModel.deleteSupplement(supplement) },
+                                modifier = Modifier.testTag("delete_supplement_${supplement.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Button(
+                    onClick = { showAddDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                        .testTag("add_supplement_trigger_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add")
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Add Supplement")
+                }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(40.dp))
+            }
+        }
+
+        if (showAddDialog) {
+            AddSupplementDialog(
+                onDismiss = { showAddDialog = false },
+                onConfirm = { name, dosage, freq, days, time, notes ->
+                    viewModel.insertSupplement(name, dosage, freq, days, time, notes)
+                    showAddDialog = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun AddSupplementDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String, String, String, String, String, String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var dosage by remember { mutableStateOf("") }
+    var frequency by remember { mutableStateOf("Once Daily") }
+    var notes by remember { mutableStateOf("") }
+    val timeOfDay = "Morning"
+    
+    val daysList = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    val selectedDays = remember { mutableStateMapOf<String, Boolean>().apply {
+        daysList.forEach { put(it, false) }
+    } }
+    
+    var showFreqDropdown by remember { mutableStateOf(false) }
+    val frequencies = listOf("Once Daily", "Twice Daily", "Weekly", "Alternate Days")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Add Supplement Guideline",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Supplement Name") },
+                    placeholder = { Text("e.g., Vitamin D3, Magnesium Glycinate") },
+                    modifier = Modifier.fillMaxWidth().testTag("add_supplement_name_input"),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = dosage,
+                    onValueChange = { dosage = it },
+                    label = { Text("Dosage / Strength") },
+                    placeholder = { Text("e.g. 5000 IU, 400 mg, 1 pill") },
+                    modifier = Modifier.fillMaxWidth().testTag("add_supplement_dosage_input"),
+                    singleLine = true
+                )
+
+                // Frequency Select Box
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = frequency,
+                        onValueChange = {},
+                        label = { Text("Frequency") },
+                        readOnly = true,
+                        trailingIcon = {
+                            IconButton(onClick = { showFreqDropdown = !showFreqDropdown }) {
+                                Icon(imageVector = Icons.Default.Info, contentDescription = "Dropdown")
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showFreqDropdown = true }
+                            .testTag("add_supplement_frequency_input")
+                    )
+                    
+                    DropdownMenu(
+                        expanded = showFreqDropdown,
+                        onDismissRequest = { showFreqDropdown = false }
+                    ) {
+                        frequencies.forEach { freq ->
+                            DropdownMenuItem(
+                                text = { Text(freq) },
+                                onClick = {
+                                    frequency = freq
+                                    showFreqDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // If Weekly, display day select chips
+                if (frequency == "Weekly") {
+                    Text(
+                        text = "Scheduled Days",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        daysList.forEach { day ->
+                            val isSelected = selectedDays[day] == true
+                            val chipBg = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            val chipBorderColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                            val chipTextColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+
+                            Surface(
+                                selected = isSelected,
+                                onClick = { selectedDays[day] = !isSelected },
+                                color = chipBg,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .border(1.dp, chipBorderColor, RoundedCornerShape(8.dp))
+                                    .testTag("day_chip_$day")
+                            ) {
+                                Text(
+                                    text = day.take(3),
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = chipTextColor,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Guideline Notes (Optional)") },
+                    placeholder = { Text("e.g., Take with dinner") },
+                    modifier = Modifier.fillMaxWidth().testTag("add_supplement_notes_input"),
+                    singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (name.isNotEmpty() && dosage.isNotEmpty()) {
+                        val daysString = if (frequency == "Weekly") {
+                            selectedDays.filter { it.value }.keys.joinToString(",")
+                        } else {
+                            ""
+                        }
+                        onConfirm(name, dosage, frequency, daysString, timeOfDay, notes)
+                    }
+                },
+                enabled = name.isNotEmpty() && dosage.isNotEmpty(),
+                modifier = Modifier.testTag("confirm_add_supplement_button")
+            ) {
+                Text("Confirm")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("dismiss_add_supplement_button")
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
 }

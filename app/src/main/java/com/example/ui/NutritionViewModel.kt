@@ -67,6 +67,19 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
             initialValue = emptyList()
         )
 
+    val allSupplements: StateFlow<List<com.example.data.Supplement>> = repository.allSupplements
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    private val _observationDaysLimit = MutableStateFlow(30)
+    val observationDaysLimit: StateFlow<Int> = _observationDaysLimit.asStateFlow()
+
+    private val _selectedObservationNutrientKey = MutableStateFlow("calories")
+    val selectedObservationNutrientKey: StateFlow<String> = _selectedObservationNutrientKey.asStateFlow()
+
     init {
         // Load custom RDA overrides
         val saved = mutableMapOf<String, Double>()
@@ -80,12 +93,27 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
         _customRdaOverrides.value = saved
+        _observationDaysLimit.value = sharedPrefs.getInt("observation_days_limit", 30)
 
         viewModelScope.launch {
-            // Check if DB is empty, pre-populate if true to show trend curves immediately
-            val existing = repository.allEntries.first()
-            if (existing.isEmpty()) {
-                prepopulateSampleLogs()
+            _currentDate.collect { dateStr ->
+                try {
+                    repository.autoLogSupplementsForDate(dateStr)
+                } catch (e: Exception) {
+                    android.util.Log.e("NutritionViewModel", "Auto-logging supplements failed", e)
+                }
+            }
+        }
+
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                // Check if DB is empty, pre-populate if true to show trend curves immediately
+                val existing = repository.allEntries.first()
+                if (existing.isEmpty()) {
+                    prepopulateSampleLogs()
+                }
+            } catch (t: Throwable) {
+                android.util.Log.e("NutritionViewModel", "Database dynamic check or pre-population failed", t)
             }
         }
     }
@@ -119,8 +147,124 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
     // 4. Overarching 7-day trend values
     val sevenDayTrends: StateFlow<List<DayTrend>> = allLogEntries.mapToTrends()
 
+    // 5. Nutrient observation and fasting/feasting details
+    fun updateObservationDaysLimit(limit: Int) {
+        val validLimit = limit.coerceIn(1, 120)
+        _observationDaysLimit.value = validLimit
+        sharedPrefs.edit().putInt("observation_days_limit", validLimit).apply()
+    }
+
+    fun selectObservationNutrient(key: String) {
+        _selectedObservationNutrientKey.value = key
+    }
+
+    val nutrientObservations: StateFlow<List<NutrientObservationDay>> = combine(
+        allLogEntries,
+        customRdaOverrides,
+        observationDaysLimit,
+        selectedObservationNutrientKey,
+        currentDate
+    ) { entries, overrides, limit, key, anchorDate ->
+        val definition = Nutrients.getByKey(key) ?: return@combine emptyList()
+        val expected = overrides[key] ?: definition.rda
+
+        val groupedByDate = entries.groupBy { it.date }
+        val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val viewFormat = SimpleDateFormat("MMM d (E)", Locale.US)
+
+        val calendar = Calendar.getInstance()
+        try {
+            val parsedAnchor = format.parse(anchorDate)
+            if (parsedAnchor != null) {
+                calendar.time = parsedAnchor
+            }
+        } catch (e: Exception) {
+            // fallback
+        }
+
+        val datesList = mutableListOf<String>()
+        for (i in 0 until limit) {
+            val dateStr = format.format(calendar.time)
+            datesList.add(dateStr)
+            calendar.add(Calendar.DATE, -1)
+        }
+        datesList.reverse()
+
+        var runningTotal = 0.0
+        datesList.map { dateStr ->
+            val dayEntries = groupedByDate[dateStr] ?: emptyList()
+            val achieved = dayEntries.sumOf { (it.nutrients[key] ?: 0.0) * it.quantity }
+            val diff = expected - achieved
+            runningTotal += diff
+
+            val dispDate = try {
+                val parsedDate = format.parse(dateStr)
+                if (parsedDate != null) viewFormat.format(parsedDate) else dateStr
+            } catch (e: Exception) {
+                dateStr
+            }
+
+            NutrientObservationDay(
+                dateString = dateStr,
+                displayDate = dispDate,
+                expected = expected,
+                achieved = achieved,
+                difference = diff,
+                isFasting = achieved < expected,
+                runningTotalDiff = runningTotal
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     fun selectDate(dateString: String) {
         _currentDate.value = dateString
+        viewModelScope.launch {
+            try {
+                repository.autoLogSupplementsForDate(dateString)
+            } catch (e: Exception) {
+                // Ignore silent logs
+            }
+        }
+    }
+
+    fun insertSupplement(name: String, dosage: String, frequency: String, daysOfWeek: String = "", timeOfDay: String = "Morning", notes: String = "") {
+        viewModelScope.launch {
+            val supplement = com.example.data.Supplement(
+                name = name,
+                dosage = dosage,
+                frequency = frequency,
+                daysOfWeek = daysOfWeek,
+                timeOfDay = timeOfDay,
+                notes = notes
+            )
+            repository.insertSupplement(supplement)
+            _operationMessage.value = "Registered supplement: $name"
+            try {
+                repository.autoLogSupplementsForDate(_currentDate.value)
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
+
+    fun deleteSupplement(supplement: com.example.data.Supplement) {
+        viewModelScope.launch {
+            repository.deleteSupplement(supplement)
+            _operationMessage.value = "Removed supplement: ${supplement.name}"
+        }
+    }
+
+    fun triggerAutoLog() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val added = repository.autoLogSupplementsForDate(_currentDate.value)
+            _isLoading.value = false
+            if (added > 0) {
+                _operationMessage.value = "Added $added scheduled supplement(s)!"
+            } else {
+                _operationMessage.value = "All active supplements already logged."
+            }
+        }
     }
 
     fun clearMessage() {
@@ -670,103 +814,107 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun prepopulateSampleLogs() {
-        viewModelScope.launch {
-            val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-            val cal = Calendar.getInstance()
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                val cal = Calendar.getInstance()
 
-            // Today: Balanced day
-            val todayDate = format.format(cal.time)
-            repository.insertEntry(
-                FoodLogEntry(
-                    date = todayDate,
-                    foodName = "Greek yogurt with honey and chia seeds",
-                    mealType = "Breakfast",
-                    nutrients = repository.createFallbackEntry("greek yogurt chia honey", todayDate, "Breakfast").nutrients
+                // Today: Balanced day
+                val todayDate = format.format(cal.time)
+                repository.insertEntry(
+                    FoodLogEntry(
+                        date = todayDate,
+                        foodName = "Greek yogurt with honey and chia seeds",
+                        mealType = "Breakfast",
+                        nutrients = repository.createFallbackEntry("greek yogurt chia honey", todayDate, "Breakfast").nutrients
+                    )
                 )
-            )
-            repository.insertEntry(
-                FoodLogEntry(
-                    date = todayDate,
-                    foodName = "Grilled chicken breast, brown rice and broccoli",
-                    mealType = "Lunch",
-                    nutrients = repository.createFallbackEntry("grilled chicken brown rice broccoli", todayDate, "Lunch").nutrients
+                repository.insertEntry(
+                    FoodLogEntry(
+                        date = todayDate,
+                        foodName = "Grilled chicken breast, brown rice and broccoli",
+                        mealType = "Lunch",
+                        nutrients = repository.createFallbackEntry("grilled chicken brown rice broccoli", todayDate, "Lunch").nutrients
+                    )
                 )
-            )
-            repository.insertEntry(
-                FoodLogEntry(
-                    date = todayDate,
-                    foodName = "Baked salmon with spinach salad",
-                    mealType = "Dinner",
-                    nutrients = repository.createFallbackEntry("baked salmon spinach salad", todayDate, "Dinner").nutrients
+                repository.insertEntry(
+                    FoodLogEntry(
+                        date = todayDate,
+                        foodName = "Baked salmon with spinach salad",
+                        mealType = "Dinner",
+                        nutrients = repository.createFallbackEntry("baked salmon spinach salad", todayDate, "Dinner").nutrients
+                    )
                 )
-            )
 
-            // Yesterday (2026-05-24): High-sodium, low vitamin day
-            cal.add(Calendar.DATE, -1)
-            val yesterdayDate = format.format(cal.time)
-            repository.insertEntry(
-                FoodLogEntry(
-                    date = yesterdayDate,
-                    foodName = "Double bacon cheeseburger",
-                    mealType = "Lunch",
-                    nutrients = repository.createFallbackEntry("burger bacon cheese", yesterdayDate, "Lunch").nutrients.toMutableMap().apply {
-                        put("sodium", 2600.0) // exceed limit
-                        put("saturated_fat", 25.0) // exceed limit
-                        put("calories", 950.0)
-                        put("vitamin_c", 0.0) // zero
-                        put("vitamin_d", 0.0)
-                    }
+                // Yesterday (2026-05-24): High-sodium, low vitamin day
+                cal.add(Calendar.DATE, -1)
+                val yesterdayDate = format.format(cal.time)
+                repository.insertEntry(
+                    FoodLogEntry(
+                        date = yesterdayDate,
+                        foodName = "Double bacon cheeseburger",
+                        mealType = "Lunch",
+                        nutrients = repository.createFallbackEntry("burger bacon cheese", yesterdayDate, "Lunch").nutrients.toMutableMap().apply {
+                            put("sodium", 2600.0) // exceed limit
+                            put("saturated_fat", 25.0) // exceed limit
+                            put("calories", 950.0)
+                            put("vitamin_c", 0.0) // zero
+                            put("vitamin_d", 0.0)
+                        }
+                    )
                 )
-            )
-            repository.insertEntry(
-                FoodLogEntry(
-                    date = yesterdayDate,
-                    foodName = "French fries and regular soda",
-                    mealType = "Snack",
-                    nutrients = repository.createFallbackEntry("fries and soda", yesterdayDate, "Snack").nutrients.toMutableMap().apply {
-                        put("sodium", 800.0)
-                        put("sugars", 45.0)
-                        put("calories", 400.0)
-                        put("vitamin_c", 2.0)
-                    }
+                repository.insertEntry(
+                    FoodLogEntry(
+                        date = yesterdayDate,
+                        foodName = "French fries and regular soda",
+                        mealType = "Snack",
+                        nutrients = repository.createFallbackEntry("fries and soda", yesterdayDate, "Snack").nutrients.toMutableMap().apply {
+                            put("sodium", 800.0)
+                            put("sugars", 45.0)
+                            put("calories", 400.0)
+                            put("vitamin_c", 2.0)
+                        }
+                    )
                 )
-            )
 
-            // 2 Days Ago (2026-05-23): Light hydration, low-iron day
-            cal.add(Calendar.DATE, -1)
-            val twoDaysAgoDate = format.format(cal.time)
-            repository.insertEntry(
-                FoodLogEntry(
-                    date = twoDaysAgoDate,
-                    foodName = "Oatmeal with sliced banana",
-                    mealType = "Breakfast",
-                    nutrients = repository.createFallbackEntry("oatmeal banana", twoDaysAgoDate, "Breakfast").nutrients
+                // 2 Days Ago (2026-05-23): Light hydration, low-iron day
+                cal.add(Calendar.DATE, -1)
+                val twoDaysAgoDate = format.format(cal.time)
+                repository.insertEntry(
+                    FoodLogEntry(
+                        date = twoDaysAgoDate,
+                        foodName = "Oatmeal with sliced banana",
+                        mealType = "Breakfast",
+                        nutrients = repository.createFallbackEntry("oatmeal banana", twoDaysAgoDate, "Breakfast").nutrients
+                    )
                 )
-            )
-            repository.insertEntry(
-                FoodLogEntry(
-                    date = twoDaysAgoDate,
-                    foodName = "Garden salad with olive oil",
-                    mealType = "Lunch",
-                    nutrients = repository.createFallbackEntry("salad oil", twoDaysAgoDate, "Lunch").nutrients.toMutableMap().apply {
-                        put("iron", 0.2) // very deficient
-                        put("protein", 2.0)
-                        put("calories", 180.0)
-                    }
+                repository.insertEntry(
+                    FoodLogEntry(
+                        date = twoDaysAgoDate,
+                        foodName = "Garden salad with olive oil",
+                        mealType = "Lunch",
+                        nutrients = repository.createFallbackEntry("salad oil", twoDaysAgoDate, "Lunch").nutrients.toMutableMap().apply {
+                            put("iron", 0.2) // very deficient
+                            put("protein", 2.0)
+                            put("calories", 180.0)
+                        }
+                    )
                 )
-            )
-            repository.insertEntry(
-                FoodLogEntry(
-                    date = twoDaysAgoDate,
-                    foodName = "White rice with soy sauce",
-                    mealType = "Dinner",
-                    nutrients = repository.createFallbackEntry("rice soy sauce", twoDaysAgoDate, "Dinner").nutrients.toMutableMap().apply {
-                        put("sodium", 1800.0)
-                        put("protein", 3.0)
-                        put("calories", 250.0)
-                    }
+                repository.insertEntry(
+                    FoodLogEntry(
+                        date = twoDaysAgoDate,
+                        foodName = "White rice with soy sauce",
+                        mealType = "Dinner",
+                        nutrients = repository.createFallbackEntry("rice soy sauce", twoDaysAgoDate, "Dinner").nutrients.toMutableMap().apply {
+                            put("sodium", 1800.0)
+                            put("protein", 3.0)
+                            put("calories", 250.0)
+                        }
+                    )
                 )
-            )
+            } catch (t: Throwable) {
+                android.util.Log.e("NutritionViewModel", "Database prepopulation failed gracefully: ${t.localizedMessage}", t)
+            }
         }
     }
 
@@ -1093,4 +1241,14 @@ data class DeficiencyWarning(
     val group: NutrientGroup,
     val message: String,
     val isExceededLimit: Boolean
+)
+
+data class NutrientObservationDay(
+    val dateString: String,
+    val displayDate: String,
+    val expected: Double,
+    val achieved: Double,
+    val difference: Double,
+    val isFasting: Boolean,
+    val runningTotalDiff: Double
 )

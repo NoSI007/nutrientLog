@@ -20,8 +20,10 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 class FoodRepository(private val context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val dao = database.foodLogDao()
+    private val supplementDao = database.supplementDao()
 
     val allEntries: Flow<List<FoodLogEntry>> = dao.getAllEntries()
+    val allSupplements: Flow<List<Supplement>> = supplementDao.getAllSupplements()
 
     suspend fun getAllEntriesDirect(): List<FoodLogEntry> = withContext(Dispatchers.IO) {
         dao.getAllEntriesDirect()
@@ -100,7 +102,7 @@ class FoodRepository(private val context: Context) {
     ): Result<FoodLogEntry> = withContext(Dispatchers.IO) {
         val apiKey = try {
             com.example.BuildConfig.GEMINI_API_KEY
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             ""
         }
 
@@ -530,7 +532,7 @@ class FoodRepository(private val context: Context) {
     ): Result<List<FoodLogEntry>> = withContext(Dispatchers.IO) {
         val apiKey = try {
             com.example.BuildConfig.GEMINI_API_KEY
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             ""
         }
 
@@ -669,7 +671,7 @@ class FoodRepository(private val context: Context) {
             Each entry must contain:
             1. "date": The calculated date in "YYYY-MM-DD" format (e.g. "2026-05-24").
             2. "foodName": A refined, polished description of the parsed food item (e.g. "Grilled chicken breast with brown rice")
-            3. "mealType": One of: "Breakfast", "Lunch", "Dinner", "Snack". If indeterminate, infer based on common composition or context.
+            3. "mealType": One of: "Breakfast", "Lunch", "Dinner", "Snack", "Supplement". If indeterminate, infer based on common composition or context.
             4. "nutrients": A dictionary matching exactly the 41 key keys specified below. Units are absolute values (DO NOT include unit characters, e.g., "calories": 150.0).
             
             Nutrient Keys:
@@ -803,6 +805,14 @@ class FoodRepository(private val context: Context) {
                     }
                     continue
                 }
+                lower.startsWith("supplement:") || lower.equals("supplement") || lower.startsWith("supplements:") || lower.equals("supplements") -> {
+                    currentMeal = "Supplement"
+                    val foodPart = trimmed.substringAfter(":", "").trim()
+                    if (foodPart.isNotEmpty()) {
+                        entries.add(createFallbackEntry(foodPart, currentDate, currentMeal))
+                    }
+                    continue
+                }
             }
 
             val foodInput = trimmed.removeSuffix(";").trim()
@@ -812,5 +822,187 @@ class FoodRepository(private val context: Context) {
         }
 
         return entries
+    }
+
+    suspend fun getAllSupplementsDirect(): List<Supplement> = withContext(Dispatchers.IO) {
+        supplementDao.getAllSupplementsDirect()
+    }
+
+    suspend fun getSupplementById(id: Int): Supplement? = withContext(Dispatchers.IO) {
+        supplementDao.getSupplementById(id)
+    }
+
+    suspend fun insertSupplement(supplement: Supplement) = withContext(Dispatchers.IO) {
+        supplementDao.insertSupplement(supplement)
+    }
+
+    suspend fun deleteSupplement(supplement: Supplement) = withContext(Dispatchers.IO) {
+        supplementDao.deleteSupplement(supplement)
+    }
+
+    suspend fun deleteSupplementById(id: Int) = withContext(Dispatchers.IO) {
+        supplementDao.deleteSupplementById(id)
+    }
+
+    suspend fun autoLogSupplementsForDate(dateString: String): Int = withContext(Dispatchers.IO) {
+        val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val date = try {
+            format.parse(dateString)
+        } catch (e: Exception) {
+            null
+        } ?: return@withContext 0
+
+        val calendar = Calendar.getInstance().apply { time = date }
+        val dayOfWeekName = SimpleDateFormat("EEEE", Locale.US).format(date) // e.g. "Monday"
+
+        val supplements = supplementDao.getAllSupplementsDirect()
+        if (supplements.isEmpty()) return@withContext 0
+
+        val existingEntries = dao.getAllEntriesDirect().filter { it.date == dateString }
+        val supplementLogsForDay = existingEntries.filter { it.mealType == "Supplement" }
+
+        var countAdded = 0
+
+        for (supplement in supplements) {
+            val isScheduledToday = when (supplement.frequency) {
+                "Once Daily", "Twice Daily" -> true
+                "Weekly" -> {
+                    supplement.daysOfWeek.split(",")
+                        .any { it.trim().equals(dayOfWeekName, ignoreCase = true) }
+                }
+                "Alternate Days" -> {
+                    (calendar.timeInMillis / (24L * 60L * 60L * 1000L)) % 2L == 0L
+                }
+                else -> true
+            }
+
+            if (!isScheduledToday) continue
+
+            val expectedLogNames = if (supplement.frequency == "Twice Daily") {
+                listOf(
+                    "${supplement.name} (${supplement.dosage}) - Morning",
+                    "${supplement.name} (${supplement.dosage}) - Evening"
+                )
+            } else {
+                listOf("${supplement.name} (${supplement.dosage})")
+            }
+
+            for (expectedName in expectedLogNames) {
+                val alreadyLogged = supplementLogsForDay.any {
+                    it.foodName.equals(expectedName, ignoreCase = true) ||
+                    (it.foodName.startsWith(supplement.name, ignoreCase = true) && 
+                     it.foodName.contains(supplement.dosage) && 
+                     (expectedLogNames.size == 1 || it.foodName.contains(expectedName.substringAfter("- "))))
+                }
+
+                if (!alreadyLogged) {
+                    val calculatedNutrients = if (supplement.nutrients.isNotEmpty()) {
+                        supplement.nutrients
+                    } else {
+                        estimateSupplementNutrients(supplement.name, supplement.dosage)
+                    }
+
+                    val newLog = FoodLogEntry(
+                        id = 0,
+                        date = dateString,
+                        foodName = expectedName,
+                        mealType = "Supplement",
+                        quantity = 1.0,
+                        unit = "serving",
+                        nutrients = calculatedNutrients
+                    )
+
+                    dao.insertEntry(newLog)
+                    countAdded++
+                }
+            }
+        }
+
+        countAdded
+    }
+
+    private fun estimateSupplementNutrients(name: String, dosage: String): Map<String, Double> {
+        val lower = name.lowercase()
+        val lowerDosage = dosage.lowercase()
+        val accumulated = mutableMapOf<String, Double>()
+        for (definition in Nutrients.DEFINITIONS) {
+            accumulated[definition.key] = 0.0
+        }
+
+        var parsedValueNumeric = 0.0
+        try {
+            val match = Regex("([0-9.,]+)").find(lowerDosage)
+            if (match != null) {
+                parsedValueNumeric = match.groupValues[1].replace(",", "").toDouble()
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+
+        if (lower.contains("vitamin d") || lower.contains("d3")) {
+            if (parsedValueNumeric > 0.0) {
+                if (lowerDosage.contains("iu")) {
+                    accumulated["vitamin_d"] = parsedValueNumeric * 0.025
+                } else if (lowerDosage.contains("mcg") || lowerDosage.contains("µg")) {
+                    accumulated["vitamin_d"] = parsedValueNumeric
+                } else {
+                    accumulated["vitamin_d"] = 15.0
+                }
+            } else {
+                accumulated["vitamin_d"] = 25.0
+            }
+        } else if (lower.contains("vitamin c") || lower.contains("ascorbic")) {
+            if (parsedValueNumeric > 0.0 && (lowerDosage.contains("mg") || lowerDosage.contains("g"))) {
+                val factor = if (lowerDosage.contains(" g") || lowerDosage.endsWith("g") && !lowerDosage.endsWith("mg")) 1000.0 else 1.0
+                accumulated["vitamin_c"] = parsedValueNumeric * factor
+            } else {
+                accumulated["vitamin_c"] = 500.0
+            }
+        } else if (lower.contains("magnesium")) {
+            if (parsedValueNumeric > 0.0 && lowerDosage.contains("mg")) {
+                accumulated["magnesium"] = parsedValueNumeric
+            } else {
+                accumulated["magnesium"] = 250.0
+            }
+        } else if (lower.contains("iron")) {
+            if (parsedValueNumeric > 0.0 && lowerDosage.contains("mg")) {
+                accumulated["iron"] = parsedValueNumeric
+            } else {
+                accumulated["iron"] = 18.0
+            }
+        } else if (lower.contains("calcium")) {
+            if (parsedValueNumeric > 0.0 && lowerDosage.contains("mg")) {
+                accumulated["calcium"] = parsedValueNumeric
+            } else {
+                accumulated["calcium"] = 500.0
+            }
+        } else if (lower.contains("zinc")) {
+            if (parsedValueNumeric > 0.0 && lowerDosage.contains("mg")) {
+                accumulated["zinc"] = parsedValueNumeric
+            } else {
+                accumulated["zinc"] = 15.0
+            }
+        } else if (lower.contains("omega") || lower.contains("fish oil")) {
+            accumulated["polyunsaturated_fat"] = 1.0
+            accumulated["omega3"] = 1.0
+            accumulated["calories"] = 10.0
+            accumulated["fat"] = 1.0
+        } else if (lower.contains("b12") || lower.contains("methylcobalamin") || lower.contains("b-12")) {
+            accumulated["vitamin_b12"] = if (parsedValueNumeric > 0.0) parsedValueNumeric else 1000.0
+        } else if (lower.contains("folate") || lower.contains("folic")) {
+            accumulated["folate"] = if (parsedValueNumeric > 0.0) parsedValueNumeric else 400.0
+        } else if (lower.contains("multivitamin")) {
+            accumulated["vitamin_a"] = 900.0
+            accumulated["vitamin_c"] = 90.0
+            accumulated["vitamin_d"] = 15.0
+            accumulated["vitamin_e"] = 15.0
+            accumulated["vitamin_b12"] = 2.4
+            accumulated["folate"] = 400.0
+            accumulated["zinc"] = 11.0
+            accumulated["iron"] = 18.0
+            accumulated["magnesium"] = 50.0
+        }
+
+        return accumulated
     }
 }
