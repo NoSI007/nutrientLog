@@ -1,0 +1,193 @@
+<Window x:Class="DesktopNutritionTracker.CustomProfileWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:models="clr-namespace:DesktopNutritionTracker.Models"
+        mc:Ignorable="d"
+        Title="Custom Daily Profile Core Settings" Height="650" Width="850"
+        WindowStartupLocation="CenterScreen" Background="{DynamicResource BgDark}"
+        Foreground="{DynamicResource TextPrimary}" BorderBrush="{DynamicResource BorderColor}" BorderThickness="1">
+    
+    <Window.Resources>
+        <SolidColorBrush x:Key="BgDark" Color="#F3F4F6"/>
+        <SolidColorBrush x:Key="BgCard" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="AccentPrimary" Color="#2563EB"/>
+        <SolidColorBrush x:Key="AccentSecondary" Color="#DC2626"/>
+        <SolidColorBrush x:Key="TextPrimary" Color="#111827"/>
+        <SolidColorBrush x:Key="TextSecondary" Color="#4B5563"/>
+        <SolidColorBrush x:Key="BorderColor" Color="#D1D5DB"/>
+        <SolidColorBrush x:Key="StatusGreen" Color="#059669"/>
+        <SolidColorBrush x:Key="StatusRed" Color="#EF4444"/>
+
+        <Style x:Key="RoundedButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource AccentPrimary}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="15,8"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Height" Value="32"/>
+            <Style.Resources>
+                <Style TargetType="Border">
+                    <Setter Property="CornerRadius" Value="4"/>
+                </Style>
+            </Style.Resources>
+        </Style>
+
+        <Style x:Key="InputTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="{StaticResource BgDark}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="5,0"/>
+            <Setter Property="Height" Value="30"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Title Header -->
+            <RowDefinition Height="*"/>    <!-- Master split container -->
+            <RowDefinition Height="Auto"/> <!-- Footer status band -->
+        </Grid.RowDefinitions>
+
+        <!-- TITLE BAR HEADER -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
+            <StackPanel>
+                <TextBlock Text="⚙️ Custom Daily Profiles Settings Window" FontSize="20" FontWeight="Bold" Foreground="{StaticResource AccentPrimary}"/>
+                <TextBlock Text="Create, configure, and activate personalized clinical profiles to override baseline RDA thresholds easily." Foreground="{StaticResource TextSecondary}" FontSize="12" Margin="2,4,0,0"/>
+                <Separator Background="{StaticResource BorderColor}" Margin="0,15,0,0"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- MASTER SPLIT CORE CONTENT -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2.2*"/> <!-- Profile Selection & Metadata -->
+                <ColumnDefinition Width="3*"/>   <!-- Nutrients Direct Overrides Binder Grid -->
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT CORE PANEL: Profiles list database & Customization metadata -->
+            <Border Grid.Column="0" Background="{StaticResource BgCard}" CornerRadius="8" Padding="15" Margin="0,0,10,0" BorderBrush="{StaticResource BorderColor}" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/> <!-- Dropdown selection -->
+                        <RowDefinition Height="Auto"/> <!-- Active profile banner -->
+                        <RowDefinition Height="*"/>    <!-- Properties form controls -->
+                        <RowDefinition Height="Auto"/> <!-- Buttons operations bar -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Dropdown Picker -->
+                    <StackPanel Grid.Row="0" Margin="0,0,0,15">
+                        <TextBlock Text="Choose Profile Template:" Foreground="{StaticResource TextPrimary}" FontWeight="Bold" Margin="0,0,0,5"/>
+                        <ComboBox x:Name="ProfileTemplateCombo" Height="30" Background="{StaticResource BgDark}" BorderBrush="{StaticResource BorderColor}" Foreground="{StaticResource TextPrimary}" SelectionChanged="ProfileTemplateCombo_SelectionChanged" />
+                    </StackPanel>
+
+                    <!-- Active Banner info indicator -->
+                    <Border Grid.Row="1" x:Name="ActiveProfileBanner" Background="#E6F4EA" BorderBrush="{StaticResource StatusGreen}" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,15" Visibility="Collapsed">
+                        <TextBlock Text="✓ Active Selected Profile in NutriScribe Workspace Engine" Foreground="{StaticResource StatusGreen}" FontWeight="Bold" FontSize="11" HorizontalAlignment="Center"/>
+                    </Border>
+
+                    <!-- Properties Editor form layout -->
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Margin="0,0,0,15">
+                        <StackPanel>
+                            <!-- Profile details -->
+                            <TextBlock Text="Profile Name:" Foreground="{StaticResource TextPrimary}" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBox x:Name="ProfileNameInput" Style="{StaticResource InputTextBox}" Margin="0,0,0,15"/>
+
+                            <TextBlock Text="Purpose &amp; Clinical Description:" Foreground="{StaticResource TextPrimary}" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBox x:Name="ProfileDescInput" Style="{StaticResource InputTextBox}" Height="90" TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top" Padding="5,5"/>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Action buttons footprint -->
+                    <StackPanel Grid.Row="3">
+                        <Button x:Name="ApplyProfileBtn" Content="🚀 Activate &amp; Apply Selected Profile" Style="{StaticResource RoundedButton}" Background="{StaticResource StatusGreen}" Height="34" Margin="0,0,0,8" Click="ApplyProfileBtn_Click"/>
+                        
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="SaveProfileBtn" Grid.Column="0" Content="💾 Save Profile" Style="{StaticResource RoundedButton}" Height="32" Margin="0,0,4,0" Click="SaveProfileBtn_Click"/>
+                            <Button x:Name="DeleteProfileBtn" Grid.Column="1" Content="🗑️ Delete" Style="{StaticResource RoundedButton}" Background="{StaticResource StatusRed}" Height="32" Margin="4,0,0,0" Click="DeleteProfileBtn_Click"/>
+                        </Grid>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- RIGHT CORE PANEL: 41 nutrient custom targets binder grid -->
+            <Border Grid.Column="1" Background="{StaticResource BgCard}" CornerRadius="8" Padding="15" Margin="10,0,0,0" BorderBrush="{StaticResource BorderColor}" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/> <!-- Title info -->
+                        <RowDefinition Height="*"/>    <!-- Scroll list of targets inputs -->
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                        <TextBlock Text="Set Profile Target RDA Values:" Foreground="{StaticResource TextPrimary}" FontWeight="Bold" FontSize="13"/>
+                        <TextBlock Text="Customize targets for this template. (Leave empty or '0' to keep system defaults)" Foreground="{StaticResource TextSecondary}" FontSize="11" Margin="0,2,0,0"/>
+                        <Separator Background="{StaticResource BorderColor}" Margin="0,8,0,0"/>
+                    </StackPanel>
+
+                    <!-- Scrollable Targets Checklist Grid -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="NutrientTargetsItemsControl">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{StaticResource BorderColor}" BorderThickness="0,0,0,1" Padding="4,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>         <!-- Nutrient Name & Group -->
+                                                <ColumnDefinition Width="100"/>       <!-- Baseline RDA and Unit -->
+                                                <ColumnDefinition Width="100"/>       <!-- Custom target input textbox -->
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- Key description -->
+                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" FontSize="12"/>
+                                                <TextBlock Text="{Binding Group}" Foreground="{StaticResource TextSecondary}" FontSize="9"/>
+                                            </StackPanel>
+
+                                            <!-- Unit and Baseline -->
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,20,0">
+                                                <TextBlock Text="{Binding BaseTarget, StringFormat={}{0:F0}}" Foreground="{StaticResource TextSecondary}" FontSize="11"/>
+                                                <TextBlock Text=" " FontSize="11"/>
+                                                <TextBlock Text="{Binding Unit}" Foreground="{StaticResource TextSecondary}" FontSize="11"/>
+                                            </StackPanel>
+
+                                            <!-- Custom Target text entry -->
+                                            <Grid Grid.Column="2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox Grid.Column="0" Text="{Binding CustomTargetText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" 
+                                                         Background="{StaticResource BgDark}" Foreground="{StaticResource TextPrimary}" BorderBrush="{StaticResource BorderColor}" 
+                                                         Height="26" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" FontSize="11" Padding="3,0"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding Unit}" Foreground="{StaticResource TextSecondary}" FontSize="10" VerticalAlignment="Center" Margin="5,0,0,0"/>
+                                            </Grid>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- FOOTER STATUS BAND -->
+        <Border Grid.Row="2" Background="{StaticResource BgDark}" BorderBrush="{StaticResource BorderColor}" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,15,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" x:Name="StatusMessageText" Text="Ready to customize profile configurations." Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold"/>
+                <Button Grid.Column="1" Content="Close Panel" Style="{StaticResource RoundedButton}" Height="24" Padding="15,2" VerticalAlignment="Center" Click="CloseButton_Click"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

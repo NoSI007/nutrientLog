@@ -23,19 +23,65 @@ class FoodRepository(private val context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val dao = database.foodLogDao()
     private val supplementDao = database.supplementDao()
+    private val favoriteMealDao = database.favoriteMealDao()
     private val autoLogMutex = Mutex()
 
     val allEntries: Flow<List<FoodLogEntry>> = dao.getAllEntries()
     val allSupplements: Flow<List<Supplement>> = supplementDao.getAllSupplements()
+    val allFavoriteMeals: Flow<List<FavoriteMeal>> = favoriteMealDao.getAllFavoriteMeals()
+
+    suspend fun insertFavoriteMeal(meal: FavoriteMeal) = withContext(Dispatchers.IO) {
+        favoriteMealDao.insertFavoriteMeal(meal)
+    }
+
+    suspend fun deleteFavoriteMeal(meal: FavoriteMeal) = withContext(Dispatchers.IO) {
+        favoriteMealDao.deleteFavoriteMeal(meal)
+    }
+
+    suspend fun deleteFavoriteMealById(id: Int) = withContext(Dispatchers.IO) {
+        favoriteMealDao.deleteFavoriteMealById(id)
+    }
+
+    suspend fun logFavoriteMeal(mealToLog: FavoriteMeal, dateString: String, selectedMealType: String) = withContext(Dispatchers.IO) {
+        mealToLog.foods.forEach { food ->
+            val logEntry = FoodLogEntry(
+                date = dateString,
+                foodName = food.foodName,
+                mealType = selectedMealType,
+                quantity = food.quantity,
+                unit = food.unit,
+                nutrients = food.nutrients
+            )
+            dao.insertEntry(logEntry)
+        }
+    }
 
     suspend fun getAllEntriesDirect(): List<FoodLogEntry> = withContext(Dispatchers.IO) {
         dao.getAllEntriesDirect()
+    }
+
+    suspend fun exportEntriesToJson(entries: List<FoodLogEntry>): String = withContext(Dispatchers.IO) {
+        try {
+            val moshi = Moshi.Builder()
+                .add(Double::class.java, ResilientDoubleAdapter)
+                .add(Double::class.javaObjectType, ResilientDoubleAdapter)
+                .add(KotlinJsonAdapterFactory())
+                .build()
+            val listType = Types.newParameterizedType(List::class.java, FoodLogEntry::class.java)
+            val adapter = moshi.adapter<List<FoodLogEntry>>(listType)
+            adapter.toJson(entries)
+        } catch (e: Exception) {
+            Log.e("FoodRepository", "Failed to export entries JSONString", e)
+            ""
+        }
     }
 
     suspend fun exportToJson(): String = withContext(Dispatchers.IO) {
         try {
             val entries = dao.getAllEntriesDirect()
             val moshi = Moshi.Builder()
+                .add(Double::class.java, ResilientDoubleAdapter)
+                .add(Double::class.javaObjectType, ResilientDoubleAdapter)
                 .add(KotlinJsonAdapterFactory())
                 .build()
             val listType = Types.newParameterizedType(List::class.java, FoodLogEntry::class.java)
@@ -49,12 +95,15 @@ class FoodRepository(private val context: Context) {
 
     suspend fun importFromJson(jsonString: String): Result<Int> = withContext(Dispatchers.IO) {
         try {
+            val cleanJson = jsonString.trim().removePrefix("\uFEFF")
             val moshi = Moshi.Builder()
+                .add(Double::class.java, ResilientDoubleAdapter)
+                .add(Double::class.javaObjectType, ResilientDoubleAdapter)
                 .add(KotlinJsonAdapterFactory())
                 .build()
             val listType = Types.newParameterizedType(List::class.java, FoodLogEntry::class.java)
             val adapter = moshi.adapter<List<FoodLogEntry>>(listType)
-            val entries = adapter.fromJson(jsonString)
+            val entries = adapter.fromJson(cleanJson)
             if (entries != null) {
                 var count = 0
                 for (entry in entries) {
@@ -103,6 +152,16 @@ class FoodRepository(private val context: Context) {
         date: String,
         mealType: String
     ): Result<FoodLogEntry> = withContext(Dispatchers.IO) {
+        val cleanInput = foodInput.trim()
+        val isNumeric = cleanInput.all { it.isDigit() }
+        val isLikelyBarcode = (isNumeric && cleanInput.length >= 6) || getProductByBarcode(cleanInput) != null
+        if (isLikelyBarcode) {
+            return@withContext parseAndLogBarcode(cleanInput, date, mealType)
+        }
+
+        val sharedPrefs = context.getSharedPreferences("nutrition_targets", Context.MODE_PRIVATE)
+        val customApiKey = sharedPrefs.getString("usda_api_key", null)?.takeIf { it.isNotBlank() }
+
         val apiKey = try {
             com.example.BuildConfig.GEMINI_API_KEY
         } catch (e: Throwable) {
@@ -110,7 +169,28 @@ class FoodRepository(private val context: Context) {
         }
 
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
-            Log.w("FoodRepository", "No valid Gemini API key found, utilizing local fallback analyzer.")
+            Log.w("FoodRepository", "No valid Gemini API key found, attempting USDA API automatic lookup.")
+            try {
+                val searchResults = NutritionApiIntegration.searchUsda(cleanInput, customApiKey)
+                if (searchResults.isNotEmpty()) {
+                    val bestMatch = searchResults.first()
+                    val entry = FoodLogEntry(
+                        date = date,
+                        foodName = bestMatch.name,
+                        mealType = mealType,
+                        quantity = 1.0,
+                        unit = bestMatch.servingSizeUnit,
+                        nutrients = bestMatch.nutrients
+                    )
+                    dao.insertEntry(entry)
+                    Log.i("FoodRepository", "Automatically resolved '$cleanInput' nutrients via USDA FoodData Central!")
+                    return@withContext Result.success(entry)
+                }
+            } catch (e: Exception) {
+                Log.e("FoodRepository", "Auto USDA API lookup failed: ${e.message}")
+            }
+
+            Log.w("FoodRepository", "Utilizing local fallback analyzer.")
             val fallbackEntry = createFallbackEntry(foodInput, date, mealType)
             dao.insertEntry(fallbackEntry)
             return@withContext Result.success(fallbackEntry)
@@ -127,7 +207,26 @@ class FoodRepository(private val context: Context) {
         try {
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
-                Log.e("FoodRepository", "Gemini API error code: ${response.code}. Spawning fallback data model.")
+                Log.e("FoodRepository", "Gemini API error code: ${response.code}. Attempting USDA API lookup fallback.")
+                try {
+                    val searchResults = NutritionApiIntegration.searchUsda(cleanInput, customApiKey)
+                    if (searchResults.isNotEmpty()) {
+                        val bestMatch = searchResults.first()
+                        val entry = FoodLogEntry(
+                            date = date,
+                            foodName = bestMatch.name,
+                            mealType = mealType,
+                            quantity = 1.0,
+                            unit = bestMatch.servingSizeUnit,
+                            nutrients = bestMatch.nutrients
+                        )
+                        dao.insertEntry(entry)
+                        return@withContext Result.success(entry)
+                    }
+                } catch (ex: Exception) {
+                    Log.e("FoodRepository", "USDA API lookup fallback failed", ex)
+                }
+
                 val fallbackEntry = createFallbackEntry(foodInput, date, mealType)
                 dao.insertEntry(fallbackEntry)
                 return@withContext Result.success(fallbackEntry)
@@ -139,13 +238,51 @@ class FoodRepository(private val context: Context) {
                 dao.insertEntry(parsedResult)
                 return@withContext Result.success(parsedResult)
             } else {
-                Log.e("FoodRepository", "Payload parsing error. Moving to fallback profile.")
+                Log.e("FoodRepository", "Payload parsing error. Attempting USDA API lookup fallback.")
+                try {
+                    val searchResults = NutritionApiIntegration.searchUsda(cleanInput, customApiKey)
+                    if (searchResults.isNotEmpty()) {
+                        val bestMatch = searchResults.first()
+                        val entry = FoodLogEntry(
+                            date = date,
+                            foodName = bestMatch.name,
+                            mealType = mealType,
+                            quantity = 1.0,
+                            unit = bestMatch.servingSizeUnit,
+                            nutrients = bestMatch.nutrients
+                        )
+                        dao.insertEntry(entry)
+                        return@withContext Result.success(entry)
+                    }
+                } catch (ex: Exception) {
+                    Log.e("FoodRepository", "USDA API lookup fallback failed", ex)
+                }
+
                 val fallbackEntry = createFallbackEntry(foodInput, date, mealType)
                 dao.insertEntry(fallbackEntry)
                 return@withContext Result.success(fallbackEntry)
             }
         } catch (e: Exception) {
-            Log.e("FoodRepository", "Gemini API query execution failed: ${e.message}. Using backup solver.", e)
+            Log.e("FoodRepository", "Gemini API query execution failed: ${e.message}. Attempting USDA API lookup fallback.", e)
+            try {
+                val searchResults = NutritionApiIntegration.searchUsda(cleanInput, customApiKey)
+                if (searchResults.isNotEmpty()) {
+                    val bestMatch = searchResults.first()
+                    val entry = FoodLogEntry(
+                        date = date,
+                        foodName = bestMatch.name,
+                        mealType = mealType,
+                        quantity = 1.0,
+                        unit = bestMatch.servingSizeUnit,
+                        nutrients = bestMatch.nutrients
+                    )
+                    dao.insertEntry(entry)
+                    return@withContext Result.success(entry)
+                }
+            } catch (ex: Exception) {
+                Log.e("FoodRepository", "USDA API lookup fallback failed", ex)
+            }
+
             val fallbackEntry = createFallbackEntry(foodInput, date, mealType)
             dao.insertEntry(fallbackEntry)
             return@withContext Result.success(fallbackEntry)
@@ -231,6 +368,23 @@ class FoodRepository(private val context: Context) {
         mealType: String
     ): FoodLogEntry {
         val lower = foodInput.lowercase()
+
+        val matchedLookup = FoodLookupDatabase.findMatch(foodInput)
+        if (matchedLookup != null) {
+            val accumulated = mutableMapOf<String, Double>()
+            for (definition in Nutrients.DEFINITIONS) {
+                accumulated[definition.key] = matchedLookup.getNutrientValue(definition.key)
+            }
+            return FoodLogEntry(
+                date = date,
+                foodName = matchedLookup.name,
+                mealType = mealType,
+                quantity = 1.0,
+                unit = matchedLookup.servingSize,
+                nutrients = accumulated
+            )
+        }
+
         val accumulated = mutableMapOf<String, Double>()
 
         for (definition in Nutrients.DEFINITIONS) {
@@ -847,6 +1001,51 @@ class FoodRepository(private val context: Context) {
         supplementDao.deleteSupplementById(id)
     }
 
+    suspend fun exportSupplementsToJson(): String = withContext(Dispatchers.IO) {
+        try {
+            val supplements = supplementDao.getAllSupplementsDirect()
+            val moshi = Moshi.Builder()
+                .add(Double::class.java, ResilientDoubleAdapter)
+                .add(Double::class.javaObjectType, ResilientDoubleAdapter)
+                .add(KotlinJsonAdapterFactory())
+                .build()
+            val listType = Types.newParameterizedType(List::class.java, Supplement::class.java)
+            val adapter = moshi.adapter<List<Supplement>>(listType)
+            adapter.toJson(supplements)
+        } catch (e: java.lang.Exception) {
+            Log.e("FoodRepository", "Failed to export supplements JSONString", e)
+            ""
+        }
+    }
+
+    suspend fun importSupplementsFromJson(jsonString: String): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val cleanJson = jsonString.trim().removePrefix("\uFEFF")
+            val moshi = Moshi.Builder()
+                .add(Double::class.java, ResilientDoubleAdapter)
+                .add(Double::class.javaObjectType, ResilientDoubleAdapter)
+                .add(KotlinJsonAdapterFactory())
+                .build()
+            val listType = Types.newParameterizedType(List::class.java, Supplement::class.java)
+            val adapter = moshi.adapter<List<Supplement>>(listType)
+            val supplements = adapter.fromJson(cleanJson)
+            if (supplements != null) {
+                var count = 0
+                for (supp in supplements) {
+                    val cleanSupp = supp.copy(id = 0)
+                    supplementDao.insertSupplement(cleanSupp)
+                    count++
+                }
+                Result.success(count)
+            } else {
+                Result.failure(java.lang.Exception("Parsed supplements list is empty or null"))
+            }
+        } catch (e: java.lang.Exception) {
+            Log.e("FoodRepository", "Failed to import supplements JSONString", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun autoLogSupplementsForDate(dateString: String): Int = autoLogMutex.withLock {
         withContext(Dispatchers.IO) {
             val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -926,7 +1125,7 @@ class FoodRepository(private val context: Context) {
         }
     }
 
-    private fun estimateSupplementNutrients(name: String, dosage: String): Map<String, Double> {
+    fun estimateSupplementNutrients(name: String, dosage: String): Map<String, Double> {
         val lower = name.lowercase()
         val lowerDosage = dosage.lowercase()
         val accumulated = mutableMapOf<String, Double>()
@@ -1093,7 +1292,8 @@ class FoodRepository(private val context: Context) {
     suspend fun parseAndLogBarcode(
         barcode: String,
         date: String,
-        mealType: String
+        mealType: String,
+        quantity: Double = 1.0
     ): Result<FoodLogEntry> = withContext(Dispatchers.IO) {
         val localProduct = getProductByBarcode(barcode)
         if (localProduct != null) {
@@ -1102,7 +1302,7 @@ class FoodRepository(private val context: Context) {
                 date = date,
                 foodName = "${localProduct.name} (Scanned)",
                 mealType = mealType,
-                quantity = 1.0,
+                quantity = quantity,
                 unit = if (localProduct.isSupplement) "tablet" else "serving",
                 nutrients = localProduct.nutrients
             )
@@ -1123,7 +1323,7 @@ class FoodRepository(private val context: Context) {
 
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
             val entryName = "Scanned Product: $barcode"
-            val fallbackEntry = createFallbackEntry(entryName, date, mealType)
+            val fallbackEntry = createFallbackEntry(entryName, date, mealType).copy(quantity = quantity)
             dao.insertEntry(fallbackEntry)
             return@withContext Result.success(fallbackEntry)
         }
@@ -1139,7 +1339,7 @@ class FoodRepository(private val context: Context) {
         try {
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
-                val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType)
+                val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType).copy(quantity = quantity)
                 dao.insertEntry(fallbackEntry)
                 return@withContext Result.success(fallbackEntry)
             }
@@ -1147,15 +1347,16 @@ class FoodRepository(private val context: Context) {
             val bodyString = response.body?.string() ?: ""
             val parsedResult = extractNutrientsFromJson(bodyString, "Scanned Barcode: $barcode", date, mealType)
             if (parsedResult != null) {
-                dao.insertEntry(parsedResult)
-                return@withContext Result.success(parsedResult)
+                val entryToInsert = parsedResult.copy(quantity = quantity)
+                dao.insertEntry(entryToInsert)
+                return@withContext Result.success(entryToInsert)
             } else {
-                val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType)
+                val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType).copy(quantity = quantity)
                 dao.insertEntry(fallbackEntry)
                 return@withContext Result.success(fallbackEntry)
             }
         } catch (e: Exception) {
-            val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType)
+            val fallbackEntry = createFallbackEntry("Scanned Barcode $barcode", date, mealType).copy(quantity = quantity)
             dao.insertEntry(fallbackEntry)
             return@withContext Result.success(fallbackEntry)
         }
@@ -1165,7 +1366,7 @@ class FoodRepository(private val context: Context) {
         barcode: String
     ): Result<Supplement> = withContext(Dispatchers.IO) {
         val localProduct = getProductByBarcode(barcode)
-        if (localProduct != null && localProduct.isSupplement) {
+        if (localProduct != null) {
             val supplement = Supplement(
                 name = localProduct.name,
                 dosage = localProduct.dosage,
@@ -1247,12 +1448,39 @@ class FoodRepository(private val context: Context) {
             }
 
             val bodyString = response.body?.string() ?: ""
-            val cleanedJson = bodyString.substringAfter("{").substringBeforeLast("}")
-            val nameParsed = cleanedJson.substringAfter("\"name\"").substringAfter("\"").substringBefore("\"").trim()
-            val dosageParsed = cleanedJson.substringAfter("\"dosage\"").substringAfter("\"").substringBefore("\"").trim()
-
-            val finalName = if (nameParsed.isNotEmpty() && !nameParsed.contains("{")) nameParsed else "Supplement ($barcode)"
-            val finalDosage = if (dosageParsed.isNotEmpty() && !dosageParsed.contains("{")) dosageParsed else "1 capsule"
+            var finalName = "Supplement ($barcode)"
+            var finalDosage = "1 capsule"
+            try {
+                val root = org.json.JSONObject(bodyString)
+                val candidates = root.optJSONArray("candidates")
+                if (candidates != null && candidates.length() > 0) {
+                    val candidate = candidates.getJSONObject(0)
+                    val content = candidate.optJSONObject("content")
+                    if (content != null) {
+                        val parts = content.optJSONArray("parts")
+                        if (parts != null && parts.length() > 0) {
+                            val textPart = parts.getJSONObject(0).optString("text", "")
+                            val cleanJsonString = if (textPart.contains("```json")) {
+                                textPart.substringAfter("```json").substringBefore("```").trim()
+                            } else if (textPart.contains("```")) {
+                                textPart.substringAfter("```").substringBefore("```").trim()
+                            } else {
+                                textPart.trim()
+                            }
+                            val innerJson = org.json.JSONObject(cleanJsonString)
+                            finalName = innerJson.optString("name", "Supplement ($barcode)")
+                            finalDosage = innerJson.optString("dosage", "1 capsule")
+                        }
+                    }
+                }
+            } catch (jsonEx: Exception) {
+                Log.e("FoodRepository", "Manual JSON parsing failed, trying simple extraction", jsonEx)
+                val cleanedJson = bodyString.substringAfter("{").substringBeforeLast("}")
+                val nameParsed = cleanedJson.substringAfter("\"name\"").substringAfter("\"").substringBefore("\"").trim()
+                val dosageParsed = cleanedJson.substringAfter("\"dosage\"").substringAfter("\"").substringBefore("\"").trim()
+                if (nameParsed.isNotEmpty() && !nameParsed.contains("{")) finalName = nameParsed
+                if (dosageParsed.isNotEmpty() && !dosageParsed.contains("{")) finalDosage = dosageParsed
+            }
 
             val finalNutrients = estimateSupplementNutrients(finalName, finalDosage)
             val supp = Supplement(

@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.ui.draw.rotate
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
@@ -17,10 +18,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
@@ -30,15 +33,40 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Switch
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
@@ -49,6 +77,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -79,6 +108,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -86,6 +116,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -106,6 +140,9 @@ import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.animateFloat
@@ -118,6 +155,15 @@ import androidx.camera.view.PreviewView
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class SafeCreateDocument(private val mimeType: String) : ActivityResultContract<String, android.net.Uri?>() {
     override fun createIntent(context: android.content.Context, input: String): android.content.Intent {
@@ -135,10 +181,69 @@ class SafeCreateDocument(private val mimeType: String) : ActivityResultContract<
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("local_storage", android.content.Context.MODE_PRIVATE) }
+    var showBackupReminderDialog by remember { mutableStateOf(false) }
+    var pendingBackupJson by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    val backupLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportLogs { jsonString ->
+                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            outputStream.write(jsonString.toByteArray(Charsets.UTF_8))
+                        }
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            Toast.makeText(context, "Historical journal backed up successfully!", Toast.LENGTH_LONG).show()
+                            sharedPrefs.edit().putLong("last_backup_timestamp", System.currentTimeMillis()).apply()
+                            showBackupReminderDialog = false
+                        }
+                    } catch (e: Exception) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            Toast.makeText(context, "Backup failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val lastBackup = sharedPrefs.getLong("last_backup_timestamp", 0L)
+        if (lastBackup == 0L) {
+            // First run of this version, set the initial timestamp to now so the first prompt appears in 7 days
+            sharedPrefs.edit().putLong("last_backup_timestamp", System.currentTimeMillis()).apply()
+        } else {
+            val sevenDaysMillis = 7L * 24L * 60L * 60L * 1000L
+            if (System.currentTimeMillis() - lastBackup > sevenDaysMillis) {
+                showBackupReminderDialog = true
+            }
+        }
+    }
+
     var selectedTab by remember { mutableStateOf(0) }
     val currentDate by viewModel.currentDate.collectAsState()
     val operationMessage by viewModel.operationMessage.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val menuItems = remember {
+        listOf(
+            Triple(0, "Dashboard", Icons.Default.Home),
+            Triple(1, "Log Journal", Icons.Default.List),
+            Triple(8, "Food Database Lookup", Icons.Default.Search),
+            Triple(7, "Recent History", Icons.Default.Refresh),
+            Triple(3, "RDA 41 Directory", Icons.Default.List),
+            Triple(6, "Personalized Goals", Icons.Default.Settings),
+            Triple(4, "Observation Log", Icons.Default.CheckCircle),
+            Triple(5, "Supplements", Icons.Default.Info)
+        )
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -181,53 +286,148 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
 
     var showAddFoodDialog by remember { mutableStateOf(false) }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 4.dp
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = MaterialTheme.colorScheme.surface,
+                drawerTonalElevation = 4.dp,
+                modifier = Modifier.width(300.dp)
             ) {
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
+                Spacer(modifier = Modifier.height(16.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                ) {
+                    Text(
+                        text = "NutriScribe",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 24.sp
+                        ),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Clinical Intake Diagnostics",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                menuItems.forEach { (tabIndex, label, icon) ->
+                    val isSelected = selectedTab == tabIndex
+                    NavigationDrawerItem(
+                        label = { 
                             Text(
-                                text = "NutriScribe Tracker",
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 22.sp
-                                ),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "Evaluating 41 Core Essential Nutrients",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        // Status light
+                                text = label,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                style = MaterialTheme.typography.bodyMedium
+                            ) 
+                        },
+                        selected = isSelected,
+                        onClick = {
+                            selectedTab = tabIndex
+                            scope.launch { drawerState.close() }
+                        },
+                        icon = { Icon(imageVector = icon, contentDescription = null) },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        colors = NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    )
+                }
+            }
+        }
+    ) {
+        Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 4.dp
+                ) {
+                    Column {
                         Row(
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Box(
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { scope.launch { drawerState.open() } },
+                                    modifier = Modifier.testTag("menu_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Menu,
+                                        contentDescription = "Open Navigation Drawer",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "NutriScribe Tracker",
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 22.sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "Evaluating 41 Core Essential Nutrients",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                        // Status light & Settings Modal Trigger
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isLoading) Color.Yellow else Color.Green)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isLoading) "Analyzing..." else "AI Standard Mode",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { showSettingsDialog = true },
                                 modifier = Modifier
-                                    .size(10.dp)
-                                    .clip(CircleShape)
-                                    .background(if (isLoading) Color.Yellow else Color.Green)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (isLoading) "Analyzing..." else "AI Standard Mode",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                                    .size(36.dp)
+                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f), CircleShape)
+                                    .testTag("top_bar_settings_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "RDA Profile Settings",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
 
@@ -283,253 +483,19 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
                         }
                     }
 
-                    // Navigation Tabs - styled like premium visual tabs with rounded borders and background container pills
-                    ScrollableTabRow(
-                        selectedTabIndex = selectedTab,
-                        containerColor = Color.Transparent,
-                        contentColor = MaterialTheme.colorScheme.primary,
-                        edgePadding = 0.dp,
-                        indicator = { tabPositions ->
-                            // Custom indicators hidden or replaced to rely purely on the full-bordered capsule pill button style
-                        }
-                    ) {
-                        Tab(
-                            selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
-                            modifier = Modifier
-                                .padding(horizontal = 6.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (selectedTab == 0) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                                )
-                                .border(
-                                    width = if (selectedTab == 0) 1.5.dp else 1.dp,
-                                    color = if (selectedTab == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .testTag("tab_dashboard"),
-                            text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Home,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = if (selectedTab == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Dashboard",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = if (selectedTab == 0) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        )
-                        Tab(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
-                            modifier = Modifier
-                                .padding(horizontal = 6.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (selectedTab == 1) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                                )
-                                .border(
-                                    width = if (selectedTab == 1) 1.5.dp else 1.dp,
-                                    color = if (selectedTab == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .testTag("tab_journal"),
-                            text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.List,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = if (selectedTab == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Log Journal",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = if (selectedTab == 1) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        )
-                        Tab(
-                            selected = selectedTab == 2,
-                            onClick = { selectedTab = 2 },
-                            modifier = Modifier
-                                .padding(horizontal = 6.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (selectedTab == 2) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                                )
-                                .border(
-                                    width = if (selectedTab == 2) 1.5.dp else 1.dp,
-                                    color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .testTag("tab_reports"),
-                            text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Warning,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Reports & Trends",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = if (selectedTab == 2) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        )
-                        Tab(
-                            selected = selectedTab == 3,
-                            onClick = { selectedTab = 3 },
-                            modifier = Modifier
-                                .padding(horizontal = 6.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (selectedTab == 3) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                                )
-                                .border(
-                                    width = if (selectedTab == 3) 1.5.dp else 1.dp,
-                                    color = if (selectedTab == 3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .testTag("tab_nutrients"),
-                            text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.List,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = if (selectedTab == 3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "RDA 41 Directory",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = if (selectedTab == 3) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        )
-                        Tab(
-                            selected = selectedTab == 4,
-                            onClick = { selectedTab = 4 },
-                            modifier = Modifier
-                                .padding(horizontal = 6.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (selectedTab == 4) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                                )
-                                .border(
-                                    width = if (selectedTab == 4) 1.5.dp else 1.dp,
-                                    color = if (selectedTab == 4) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .testTag("tab_observations"),
-                            text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = if (selectedTab == 4) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Observation Log",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = if (selectedTab == 4) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        )
-                        Tab(
-                            selected = selectedTab == 5,
-                            onClick = { selectedTab = 5 },
-                            modifier = Modifier
-                                .padding(horizontal = 6.dp, vertical = 6.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (selectedTab == 5) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.9f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                                )
-                                .border(
-                                    width = if (selectedTab == 5) 1.5.dp else 1.dp,
-                                    color = if (selectedTab == 5) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(12.dp)
-                                )
-                                .testTag("tab_supplements"),
-                            text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Info,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = if (selectedTab == 5) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Supplements",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = if (selectedTab == 5) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        )
                     }
                 }
-            }
-        },
+            },
         floatingActionButton = {
             if (selectedTab == 1) {
-                FloatingActionButton(
+                ExtendedFloatingActionButton(
                     onClick = { showAddFoodDialog = true },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.testTag("add_food_fab")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = "Add Food")
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Log Food")
-                    }
-                }
+                    containerColor = MaterialTheme.colorScheme.tertiary,
+                    contentColor = MaterialTheme.colorScheme.onTertiary,
+                    modifier = Modifier.testTag("add_food_fab"),
+                    icon = { Icon(Icons.Default.Add, contentDescription = "Add Food") },
+                    text = { Text("Log Food", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)) }
+                )
             }
         }
     ) { innerPadding ->
@@ -540,11 +506,14 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
         ) {
             when (selectedTab) {
                 0 -> DashboardTab(viewModel)
-                1 -> JournalTab(viewModel)
+                1 -> JournalTab(viewModel, onNavigateToTab = { selectedTab = it })
                 2 -> PeriodicReportsTab(viewModel)
                 3 -> NutrientsListTab(viewModel)
                 4 -> ObservationsTab(viewModel)
                 5 -> SupplementsTab(viewModel)
+                6 -> RdaConfigPanelTab(viewModel)
+                7 -> RecentHistoryTab(viewModel)
+                8 -> FoodDatabaseLookupTab(viewModel)
             }
 
             if (isLoading) {
@@ -585,6 +554,7 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
             }
         }
     }
+}
 
     if (showAddFoodDialog) {
         AddFoodDialog(
@@ -596,7 +566,80 @@ fun NutritionTrackerMainScreen(viewModel: NutritionViewModel) {
             onConfirmBulk = { bulkContent ->
                 showAddFoodDialog = false
                 viewModel.addBulkFoodLog(bulkContent)
+            },
+            onConfirmBarcode = { barcode, mealType, quantity ->
+                showAddFoodDialog = false
+                viewModel.addBarcodeFoodLog(barcode, mealType, quantity)
             }
+        )
+    }
+
+    if (showSettingsDialog) {
+        RdaBiologicalSettingsDialog(
+            viewModel = viewModel,
+            onDismiss = { showSettingsDialog = false }
+        )
+    }
+
+    if (showBackupReminderDialog) {
+        AlertDialog(
+            onDismissRequest = { showBackupReminderDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Backup Warning",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        text = "Safety Backup Reminder",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "It has been more than 7 days since your last local data backup. Keeping daily nutritional history, meal logs, and supplement schedules backed up ensures you never lose progress.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "Would you like to export your clinical journals as a portable JSON file now?",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        try {
+                            viewModel.exportLogs { jsonString ->
+                                pendingBackupJson = jsonString
+                                backupLauncher.launch("nutriscribe-journal-backup.json")
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Error starting exporter: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.testTag("backup_prompt_confirm_button")
+                ) {
+                    Text("Backup Now")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showBackupReminderDialog = false },
+                    modifier = Modifier.testTag("backup_prompt_dismiss_button")
+                ) {
+                    Text("Remind Me Later")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
         )
     }
 }
@@ -614,18 +657,1075 @@ data class RecommendationItem(
     val type: RecommendationType
 )
 
+data class FoodTemplate(
+    val name: String,
+    val emoji: String,
+    val category: String
+)
+
+@Composable
+fun FoodSearchQuickLogger(
+    viewModel: NutritionViewModel,
+    modifier: Modifier = Modifier
+) {
+    var searchText by remember { mutableStateOf("") }
+    var selectedMeal by remember { mutableStateOf("Lunch") }
+    var quantity by remember { mutableStateOf(1.0) }
+
+    val mealTypes = remember { listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement") }
+
+    val templates = remember {
+        listOf(
+            FoodTemplate("Egg", "🍳", "Breakfast"),
+            FoodTemplate("Banana", "🍌", "Snack"),
+            FoodTemplate("Chicken Breast", "🍗", "Lunch"),
+            FoodTemplate("Beef Steak", "🥩", "Dinner"),
+            FoodTemplate("Apple", "🍎", "Snack"),
+            FoodTemplate("Whole Wheat Bread", "🍞", "Breakfast"),
+            FoodTemplate("Greek Yogurt", "🥛", "Breakfast"),
+            FoodTemplate("Brown Rice", "🍚", "Lunch"),
+            FoodTemplate("Grilled Salmon", "🐟", "Dinner"),
+            FoodTemplate("Spinach Salad", "🥬", "Lunch"),
+            FoodTemplate("Soda", "🥤", "Snack"),
+            FoodTemplate("Olive Oil", "🫒", "Dinner"),
+            FoodTemplate("Almonds / Nuts", "🥜", "Snack")
+        )
+    }
+
+    val filteredTemplates = remember(searchText) {
+        if (searchText.isBlank()) {
+            templates
+        } else {
+            templates.filter { it.name.contains(searchText, ignoreCase = true) }
+        }
+    }
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("food_search_quick_logger_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Quick Search & Log Food",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Instant search and log to daily totals",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("🍽️", fontSize = 16.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Search Bar
+            OutlinedTextField(
+                value = searchText,
+                onValueChange = { searchText = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("quick_food_search_input"),
+                placeholder = { Text("Search or type custom food...") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search icon",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingIcon = {
+                    if (searchText.isNotEmpty()) {
+                        IconButton(onClick = { searchText = "" }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+                )
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Matching templates chips
+            Text(
+                text = if (searchText.isBlank()) "Popular Healthy Presets" else "Matching Presets",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (filteredTemplates.isEmpty()) {
+                    item {
+                        Text(
+                            text = "No preset match. Typing will log as custom food.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
+                    }
+                } else {
+                    items(filteredTemplates) { template ->
+                        Surface(
+                            onClick = {
+                                searchText = template.name
+                                selectedMeal = template.category
+                            },
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+                            modifier = Modifier
+                                .testTag("quick_food_preset_chip_${template.name.replace(" ", "_").lowercase()}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(template.emoji, fontSize = 12.sp)
+                                Text(
+                                    text = template.name,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Meal Selector
+            Text(
+                text = "Meal Category",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                mealTypes.forEach { type ->
+                    val isSelected = selectedMeal == type
+                    Surface(
+                        onClick = { selectedMeal = type },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .testTag("quick_food_meal_chip_${type.lowercase()}"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        border = if (isSelected) BorderStroke(1.2.dp, MaterialTheme.colorScheme.primary) else null
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Text(
+                                text = type,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                ),
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Servings slider selector
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Servings Profile",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "%.1fx Servings".format(quantity),
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            Slider(
+                value = quantity.toFloat(),
+                onValueChange = { quantity = Math.round(it * 10.0) / 10.0 },
+                valueRange = 0.5f..5.0f,
+                steps = 8,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("quick_food_servings_slider")
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Action Row
+            Button(
+                onClick = {
+                    if (searchText.isNotBlank()) {
+                        val loggedText = if (quantity == 1.0) {
+                            searchText.trim()
+                        } else if (quantity % 1.0 == 0.0) {
+                            "${quantity.toInt()} servings of ${searchText.trim()}"
+                        } else {
+                            "$quantity servings of ${searchText.trim()}"
+                        }
+                        viewModel.addFoodLog(loggedText, selectedMeal)
+                        searchText = ""
+                        quantity = 1.0
+                    }
+                },
+                enabled = searchText.isNotBlank(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .testTag("quick_food_log_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Log Food Icon",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Add to Daily Log",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+        }
+    }
+}
+
+data class NutrientChartItem(
+    val key: String,
+    val name: String,
+    val icon: String,
+    val color: Color,
+    val description: String
+)
+
+@Composable
+fun VitaminsMineralsRdaChart(dailyNutrients: List<NutrientStatus>) {
+    var selectedCategoryTab by remember { mutableStateOf("Vitamins") }
+    var expandedNutrientKey by remember { mutableStateOf<String?>(null) }
+
+    val keyVitamins = remember {
+        listOf(
+            NutrientChartItem("vitamin_a", "Vitamin A", "👁️", Color(0xFFF59E0B), "Promotes healthy vision, gene expression, and immune defense."),
+            NutrientChartItem("vitamin_c", "Vitamin C", "🍊", Color(0xFFEF4444), "Antioxidant essential for collagen, skin health, and iron absorption."),
+            NutrientChartItem("vitamin_d", "Vitamin D", "☀️", Color(0xFFFBBF24), "Vital for calcium metabolism and bone structural density."),
+            NutrientChartItem("vitamin_e", "Vitamin E", "🛡️", Color(0xFF10B981), "Lipid-soluble antioxidant shielding cell membranes from oxidation."),
+            NutrientChartItem("vitamin_k", "Vitamin K", "🥬", Color(0xFF0D9488), "Involved in blood coagulation and direct bone calcium deposition."),
+            NutrientChartItem("vitamin_b12", "Vitamin B12", "🥩", Color(0xFFEC4899), "Essential cofactor in DNA assembly and healthy neurological cells.")
+        )
+    }
+
+    val keyMinerals = remember {
+        listOf(
+            NutrientChartItem("calcium", "Calcium", "🦴", Color(0xFF3B82F6), "Provides framework density for bones and paces heart beats."),
+            NutrientChartItem("iron", "Iron", "🔬", Color(0xFF9E2A2B), "Active center of hemoglobin, facilitating system oxygen transport."),
+            NutrientChartItem("magnesium", "Magnesium", "🌰", Color(0xFF8B5CF6), "Regulates nerve lines, blood pressure, and protein synthesis."),
+            NutrientChartItem("potassium", "Potassium", "🍌", Color(0xFF6366F1), "Intracellular mineral supporting clean blood pressure and heart cadence."),
+            NutrientChartItem("sodium", "Sodium", "🧂", Color(0xFFF59E0B), "Balances fluid pressure, but excessive level stresses arterial walls."),
+            NutrientChartItem("zinc", "Zinc", "🧬", Color(0xFF0F766E), "Catalyzes immune response pathways and cellular tissue replication.")
+        )
+    }
+
+    val activeItems = if (selectedCategoryTab == "Vitamins") keyVitamins else keyMinerals
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("vitamins_minerals_rda_chart_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Vitamins & Minerals RDA Tracker",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Dynamic daily intake progress comparison",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("📊", fontSize = 16.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Sub-category toggles
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+            ) {
+                listOf("Vitamins" to "💊 Vitamins", "Minerals" to "🪨 Minerals").forEach { (tabKey, label) ->
+                    val isSelected = selectedCategoryTab == tabKey
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.primaryContainer 
+                                else Color.Transparent
+                            )
+                            .clickable { 
+                                selectedCategoryTab = tabKey
+                                expandedNutrientKey = null
+                            }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            ),
+                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer 
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Target baseline guidelines indicator
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .background(if (selectedCategoryTab == "Vitamins") Color(0xFFEF4444) else Color(0xFF3B82F6), RoundedCornerShape(2.dp))
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Intake Progress",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .width(16.dp)
+                            .height(1.dp)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "100% RDA Goal Line",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Chart Rows Content
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                activeItems.forEach { item ->
+                    val status = dailyNutrients.find { it.definition.key == item.key }
+                    val rdaVal = status?.definition?.rda ?: when (item.key) {
+                        "vitamin_a" -> 900.0
+                        "vitamin_c" -> 90.0
+                        "vitamin_d" -> 15.0
+                        "vitamin_e" -> 15.0
+                        "vitamin_k" -> 120.0
+                        "vitamin_b12" -> 2.4
+                        "calcium" -> 1000.0
+                        "iron" -> 18.0
+                        "magnesium" -> 400.0
+                        "potassium" -> 3400.0
+                        "sodium" -> 2300.0
+                        "zinc" -> 11.0
+                        else -> 10.0
+                    }
+                    val intakeVal = status?.intake ?: 0.0
+                    val unitStr = status?.definition?.unit ?: when (item.key) {
+                        "vitamin_a", "vitamin_d", "vitamin_k", "vitamin_b12" -> "mcg"
+                        else -> "mg"
+                    }
+                    val percentageVal = status?.percentage ?: if (rdaVal > 0) (intakeVal / rdaVal * 100.0) else 0.0
+                    val isExpanded = expandedNutrientKey == item.key
+
+                    // Spring visual progress animation
+                    val animatedPercentage by androidx.compose.animation.core.animateFloatAsState(
+                        targetValue = percentageVal.toFloat(),
+                        animationSpec = androidx.compose.animation.core.spring(
+                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioLowBouncy,
+                            stiffness = androidx.compose.animation.core.Spring.StiffnessLow
+                        ),
+                        label = "progress"
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (isExpanded) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                else Color.Transparent
+                            )
+                            .clickable {
+                                expandedNutrientKey = if (isExpanded) null else item.key
+                            }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        // Title + numeric progress header
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(item.icon, fontSize = 14.sp, modifier = Modifier.padding(end = 6.dp))
+                                Text(
+                                    text = item.name,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                if (item.key != "sodium" && percentageVal < 80.0) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(Color(0xFFFFECEB))
+                                            .border(1.dp, Color(0xFFFCA5A5), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            .testTag("deficient_badge_chart_${item.key}")
+                                    ) {
+                                        Text(
+                                            text = "DEFICIENT",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                                            color = Color(0xFFC53030)
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "${String.format(Locale.US, "%.1f", intakeVal)} / ${rdaVal.toInt()} $unitStr",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(
+                                            if (percentageVal >= 100.0) Color(0xFFDCFCE7) 
+                                            else if (percentageVal >= 80.0) Color(0xFFFEF3C7) 
+                                            else Color(0xFFFEE2E2)
+                                        )
+                                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "${percentageVal.toInt()}%",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (percentageVal >= 100.0) Color(0xFF166534) 
+                                                else if (percentageVal >= 80.0) Color(0xFF92400E) 
+                                                else Color(0xFF991B1B)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Progress line container
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(12.dp)
+                        ) {
+                            // Track
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                            )
+
+                            // Dynamic Color Fill
+                            val fillFraction = (animatedPercentage / 120f).coerceIn(0f, 1f)
+                            if (fillFraction > 0f) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(fillFraction)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(item.color)
+                                )
+                            }
+
+                            // 100% RDA boundary guideline (at 100/120 = 83.33% of the total track width)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .align(Alignment.CenterStart)
+                                    .fillMaxWidth(100f / 120f)
+                            ) {
+                                Canvas(modifier = Modifier.fillMaxSize().align(Alignment.CenterEnd)) {
+                                    drawLine(
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        start = androidx.compose.ui.geometry.Offset(size.width, 0f),
+                                        end = androidx.compose.ui.geometry.Offset(size.width, size.height),
+                                        strokeWidth = 2.5f
+                                    )
+                                }
+                            }
+                        }
+
+                        // Tooltip Clinical Advice Info Drawer
+                        AnimatedVisibility(visible = isExpanded) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp, bottom = 4.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                    .padding(8.dp)
+                            ) {
+                                Text(
+                                    text = "Clinical Role & Integration:",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = item.color)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = status?.definition?.description?.ifEmpty { item.description } ?: item.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    lineHeight = 16.sp
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                val rdaTip = when(item.key) {
+                                    "vitamin_c" -> "Tip: Pair Vitamin C with plant-based iron (spinach, beans, lentils) to accelerate absorption up to 300%!"
+                                    "calcium" -> "Tip: Ensure adequate Vitamin D and healthy digestive fats are present concurrently to maximize calcium bone integration."
+                                    "iron" -> "Tip: Calcium and black teas/coffees can bind free iron. Consider safe separating margins of 2 hours."
+                                    "vitamin_d" -> "Tip: Being lipid-soluble, taking Vitamin D with healthy whole fats (healthy oils, seeds, salmon) increases metabolic availability."
+                                    "vitamin_a" -> "Tip: Pre-formed Vitamin A works synchronously with zinc to sustain dark vision adaptation curves."
+                                    "sodium" -> "Tip: Counter high sodium counts and promote tissue hydration by maintaining active Potassium (bananas, avocados) balances."
+                                    else -> "Daily healthy tip: Prioritize fresh biological whole food sources of minerals to maximize total assimilation."
+                                }
+                                Text(
+                                    text = rdaTip,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NutrientRadarChart(
+    dailyNutrients: List<NutrientStatus>,
+    modifier: Modifier = Modifier
+) {
+    // 3 interactive presets for targeted nutritional web viewing
+    val presets = remember {
+        listOf(
+            Triple("Essential Overview", "Overall daily intake targets", listOf("calories", "protein", "carbohydrates", "fat", "fiber", "calcium", "iron", "vitamin_c")),
+            Triple("Vitamins & Minerals", "Micro-nutritional benchmarks", listOf("calcium", "iron", "vitamin_c", "potassium", "vitamin_d", "magnesium")),
+            Triple("Macronutrient Web", "Primary energy balance", listOf("calories", "protein", "carbohydrates", "fat", "fiber"))
+        )
+    }
+
+    var selectedPresetIndex by remember { mutableStateOf(0) }
+    val currentPreset = presets[selectedPresetIndex]
+    val selectedKeys = currentPreset.third
+
+    val filteredStatus = remember(dailyNutrients, selectedKeys) {
+        selectedKeys.mapNotNull { key ->
+            dailyNutrients.find { it.definition.key == key }
+        }
+    }
+
+    val textMeasurer = rememberTextMeasurer()
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("nutrient_radar_chart_card"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+        ),
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Header Info
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh, // Symmetrical radar-like spinning icon
+                        contentDescription = "Radar Chart Icon",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Nutritional Radar Web",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = currentPreset.second,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Scrollable chips row to select different nutritional groups
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                presets.forEachIndexed { index, preset ->
+                    val isSelected = index == selectedPresetIndex
+                    val containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(containerColor)
+                            .clickable { selectedPresetIndex = index }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .testTag("radar_preset_chip_$index")
+                    ) {
+                        Text(
+                            text = preset.first,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = contentColor
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Drawn Canvas Radar Web
+            if (filteredStatus.isNotEmpty()) {
+                val primaryColor = MaterialTheme.colorScheme.primary
+                val onPrimaryColor = MaterialTheme.colorScheme.onPrimary
+                val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                val labelColor = MaterialTheme.colorScheme.onSurface
+
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(250.dp)
+                        .testTag("nutrient_radar_canvas")
+                ) {
+                    val width = size.width
+                    val height = size.height
+                    val center = Offset(width / 2, height / 2)
+                    // Reserve space for outward radiating text labels
+                    val maxRadius = kotlin.math.min(width, height) / 2 * 0.7f
+                    val numPoints = filteredStatus.size
+
+                    // 1. Draw web grid Concentric Polygons at 25%, 50%, 75%, 100%
+                    val levels = listOf(0.25f, 0.5f, 0.75f, 1.0f)
+                    levels.forEach { level ->
+                        val rLevel = maxRadius * level
+                        val path = Path()
+                        for (i in 0 until numPoints) {
+                            val angle = i * (2 * kotlin.math.PI / numPoints) - kotlin.math.PI / 2
+                            val x = center.x + (rLevel * kotlin.math.cos(angle)).toFloat()
+                            val y = center.y + (rLevel * kotlin.math.sin(angle)).toFloat()
+                            if (i == 0) {
+                                path.moveTo(x, y)
+                            } else {
+                                path.lineTo(x, y)
+                            }
+                        }
+                        path.close()
+                        drawPath(
+                            path = path,
+                            color = gridColor,
+                            style = Stroke(width = 1.dp.toPx())
+                        )
+
+                        // Outer levels value label drawn near the vertical spoke for instant reference reading
+                        val helperLabelText = "${(level * 100).toInt()}%"
+                        val levelResult = textMeasurer.measure(
+                            text = helperLabelText,
+                            style = TextStyle(
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = labelColor.copy(alpha = 0.45f)
+                            )
+                        )
+                        drawText(
+                            textLayoutResult = levelResult,
+                            topLeft = Offset(center.x + 4.dp.toPx(), center.y - rLevel - levelResult.size.height / 2)
+                        )
+                    }
+
+                    // 2. Draw Spokes (connecting center to 100% boundary vertices)
+                    for (i in 0 until numPoints) {
+                        val angle = i * (2 * kotlin.math.PI / numPoints) - kotlin.math.PI / 2
+                        val outerX = center.x + (maxRadius * kotlin.math.cos(angle)).toFloat()
+                        val outerY = center.y + (maxRadius * kotlin.math.sin(angle)).toFloat()
+                        drawLine(
+                            color = gridColor,
+                            start = center,
+                            end = Offset(outerX, outerY),
+                            strokeWidth = 1.dp.toPx()
+                        )
+                    }
+
+                    // 3. Draw Outer Text Labels representing actual values
+                    val maxPlottedPercentage = 120.0
+                    for (i in 0 until numPoints) {
+                        val status = filteredStatus[i]
+                        val angle = i * (2 * kotlin.math.PI / numPoints) - kotlin.math.PI / 2
+
+                        val shortName = when(status.definition.key) {
+                            "calories" -> "Calories"
+                            "protein" -> "Protein"
+                            "carbohydrates" -> "Carbs"
+                            "fat" -> "Fat"
+                            "fiber" -> "Fiber"
+                            "calcium" -> "Calcium"
+                            "iron" -> "Iron"
+                            "vitamin_c" -> "Vit C"
+                            "potassium" -> "Potassium"
+                            "vitamin_d" -> "Vit D"
+                            "magnesium" -> "Magnesium"
+                            else -> status.definition.name
+                        }
+                        
+                        val pct = status.percentage.toInt()
+                        val textString = "$shortName\n$pct%"
+
+                        val labelLayoutResult = textMeasurer.measure(
+                            text = textString,
+                            style = TextStyle(
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = labelColor,
+                                textAlign = TextAlign.Center
+                            )
+                        )
+
+                        val labelRadius = maxRadius + 14.dp.toPx()
+                        val labelAnchorX = center.x + (labelRadius * kotlin.math.cos(angle)).toFloat()
+                        val labelAnchorY = center.y + (labelRadius * kotlin.math.sin(angle)).toFloat()
+
+                        drawText(
+                            textLayoutResult = labelLayoutResult,
+                            topLeft = Offset(
+                                x = labelAnchorX - labelLayoutResult.size.width / 2,
+                                y = labelAnchorY - labelLayoutResult.size.height / 2
+                            )
+                        )
+                    }
+
+                    // 4. Draw Current Daily Intake Polygon Overlay
+                    val userPath = Path()
+                    val userPoints = mutableListOf<Offset>()
+                    for (i in 0 until numPoints) {
+                        val status = filteredStatus[i]
+                        val angle = i * (2 * kotlin.math.PI / numPoints) - kotlin.math.PI / 2
+                        val displayPct = status.percentage.coerceIn(0.0, maxPlottedPercentage)
+                        val rUser = maxRadius * (displayPct / maxPlottedPercentage).toFloat()
+
+                        val x = center.x + (rUser * kotlin.math.cos(angle)).toFloat()
+                        val y = center.y + (rUser * kotlin.math.sin(angle)).toFloat()
+                        val point = Offset(x, y)
+                        userPoints.add(point)
+
+                        if (i == 0) {
+                            userPath.moveTo(x, y)
+                        } else {
+                            userPath.lineTo(x, y)
+                        }
+                    }
+
+                    if (numPoints > 0) {
+                        userPath.close()
+
+                        // Fill the translucent intake web shape
+                        drawPath(
+                            path = userPath,
+                            color = primaryColor.copy(alpha = 0.22f),
+                            style = androidx.compose.ui.graphics.drawscope.Fill
+                        )
+
+                        // Draw high contrast outer trace line
+                        drawPath(
+                            path = userPath,
+                            color = primaryColor,
+                            style = Stroke(width = 2.5.dp.toPx())
+                        )
+
+                        // Draw circular vertex markers at the data points
+                        userPoints.forEach { pt ->
+                            drawCircle(
+                                color = primaryColor,
+                                radius = 4.5.dp.toPx(),
+                                center = pt
+                            )
+                            drawCircle(
+                                color = onPrimaryColor,
+                                radius = 2.dp.toPx(),
+                                center = pt
+                            )
+                        }
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Initialize calorie log to populate target web",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun DashboardTab(viewModel: NutritionViewModel) {
     val macroSpread by viewModel.macroSpread.collectAsState()
     val dailyNutrients by viewModel.dailyNutrients.collectAsState()
+    val consecutiveMissedAlerts by viewModel.consecutiveMissedAlerts.collectAsState()
+    val currentDateEntries by viewModel.currentDateEntries.collectAsState()
     val warnings by viewModel.warnings.collectAsState()
     val trends by viewModel.sevenDayTrends.collectAsState()
     val currentDate by viewModel.currentDate.collectAsState()
+
+    val aiNutritionalTip by viewModel.aiNutritionalTip.collectAsState()
+    val isAiLoading by viewModel.isAiLoading.collectAsState()
+    val aiError by viewModel.aiError.collectAsState()
+    val isGeminiResponseActive by viewModel.isGeminiResponseActive.collectAsState()
+
+    val targetSuggestedFoods by viewModel.targetSuggestedFoods.collectAsState()
+    val isSuggestionsLoading by viewModel.isSuggestionsLoading.collectAsState()
+    val suggestionsError by viewModel.suggestionsError.collectAsState()
+
+    val currentAge by viewModel.profileAge.collectAsState()
+    val currentActivity by viewModel.profileActivity.collectAsState()
+    val currentSex by viewModel.profileSex.collectAsState()
+    var showRdaProfilerDialog by remember { mutableStateOf(false) }
+    var warningFilterMode by remember { mutableStateOf(0) } // 0 = All, 1 = Deficits, 2 = Excesses
+    var warningSortMode by remember { mutableStateOf(0) } // 0 = Severity, 1 = Alphabetical, 2 = Group
 
     val calorieStatus = dailyNutrients.find { it.definition.key == "calories" }
     val caloriesIntake = calorieStatus?.intake ?: 0.0
     val caloriesRda = calorieStatus?.definition?.rda ?: 2000.0
     val caloriesPercentage = calorieStatus?.percentage ?: 0.0
+
+    var pendingJsonContent by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var pendingTextContent by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var pendingHtmlContent by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    val jsonLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("application/json")
+    ) { uri ->
+        if (uri != null && pendingJsonContent != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write(pendingJsonContent!!.toByteArray(Charsets.UTF_8))
+                    }
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Log backup saved successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Export failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    pendingJsonContent = null
+                }
+            }
+        }
+    }
+
+    val textLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("text/plain")
+    ) { uri ->
+        if (uri != null && pendingTextContent != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write(pendingTextContent!!.toByteArray(Charsets.UTF_8))
+                    }
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Text summary saved successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Export failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    pendingTextContent = null
+                }
+            }
+        }
+    }
+
+    val htmlLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("text/html")
+    ) { uri ->
+        if (uri != null && pendingHtmlContent != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write(pendingHtmlContent!!.toByteArray(Charsets.UTF_8))
+                    }
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "HTML daily report saved successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Export failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    pendingHtmlContent = null
+                }
+            }
+        }
+    }
+
+    var pendingPdfDate by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var pendingPdfEntries by remember { androidx.compose.runtime.mutableStateOf<List<com.example.data.FoodLogEntry>?>(null) }
+    var pendingPdfNutrients by remember { androidx.compose.runtime.mutableStateOf<List<NutrientStatus>?>(null) }
+
+    val dailyPdfLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("application/pdf")
+    ) { uri ->
+        if (uri != null && pendingPdfDate != null && pendingPdfEntries != null && pendingPdfNutrients != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                        viewModel.generateDailyPdfReport(context, pendingPdfDate!!, pendingPdfEntries!!, pendingPdfNutrients!!, outputStream)
+                    }
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "PDF daily performance report saved successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Export failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    pendingPdfDate = null
+                    pendingPdfEntries = null
+                    pendingPdfNutrients = null
+                }
+            }
+        }
+    }
 
     // Dynamic state to expand or collapse standard vs all 41 nutrients in running totals list
     var showAllNutrients by remember { mutableStateOf(false) }
@@ -646,6 +1746,10 @@ fun DashboardTab(viewModel: NutritionViewModel) {
         } else {
             dailyNutrients.filter { it.definition.key in primaryKeys }
         }
+    }
+
+    val exceededLimits = remember(dailyNutrients) {
+        dailyNutrients.filter { it.definition.isMaxLimit && it.intake > it.definition.rda }
     }
 
     // Dynamic suggestions based on current progress towards RDA goals and limit safeguards
@@ -748,12 +1852,766 @@ fun DashboardTab(viewModel: NutritionViewModel) {
         list
     }
 
+    LaunchedEffect(dailyNutrients) {
+        val hasAnyIntake = dailyNutrients.any { it.intake > 0.0 }
+        if (hasAnyIntake) {
+            viewModel.triggerDailySummaryDeficiencyCheck(context, forceManual = false)
+        }
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
+            .testTag("dashboard_lazy_column")
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Daily Summary Notification Toggle Card
+        item {
+            val dailyNotificationEnabled by viewModel.dailySummaryNotificationsEnabled.collectAsState()
+            val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+            ) { isGranted ->
+                if (!isGranted) {
+                    android.widget.Toast.makeText(context, "Notification permission denied. Summary results will be showed via toast messages only.", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("daily_summary_notification_card"),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = "Daily Summary Notification Toggle",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Daily Summary Alerts",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = "Send deficiency warnings at end of day",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = dailyNotificationEnabled,
+                            onCheckedChange = { checked ->
+                                viewModel.setDailySummaryNotificationsEnabled(checked)
+                                if (checked && android.os.Build.VERSION.SDK_INT >= 33) {
+                                    val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
+                                        context, 
+                                        "android.permission.POST_NOTIFICATIONS"
+                                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                    if (!hasPerm) {
+                                        permissionLauncher.launch("android.permission.POST_NOTIFICATIONS")
+                                    }
+                                }
+                                if (checked) {
+                                    android.widget.Toast.makeText(context, "Daily Summary Alerts enabled!", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.testTag("daily_summary_notification_switch")
+                        )
+                    }
+
+                    if (dailyNotificationEnabled) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = {
+                                    viewModel.triggerDailySummaryDeficiencyCheck(context, forceManual = true)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("simulate_end_of_day_summary_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Simulate",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Simulate End of Day",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Today's Nutrition Summary Card
+        item {
+            val activeDeficienciesCount = remember(dailyNutrients) {
+                dailyNutrients.count { !it.definition.isMaxLimit && it.percentage < 100.0 && it.definition.rda > 0.0 }
+            }
+            val severeDeficienciesCount = remember(dailyNutrients) {
+                dailyNutrients.count { !it.definition.isMaxLimit && it.percentage < 50.0 && it.definition.rda > 0.0 }
+            }
+            
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dashboard_summary_card"),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DateRange,
+                                contentDescription = "Summary Calendar",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Today's Nutrition Summary",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = currentDate,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Calories Stat block
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("summary_calories_card"),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Energy Intake",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.Bottom,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = String.format(Locale.US, "%,.0f", caloriesIntake),
+                                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "/ ${caloriesRda.toInt()} kcal",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(bottom = 3.dp)
+                                    )
+                                }
+                                
+                                LinearProgressIndicator(
+                                    progress = (caloriesPercentage / 100.0).toFloat().coerceIn(0f, 1f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = if (caloriesPercentage > 100.0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                    trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                                )
+                                
+                                Text(
+                                    text = "${caloriesPercentage.toInt()}% of daily target",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Deficiencies Stat block
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("summary_deficiencies_card"),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Active Deficiencies",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.Bottom,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "$activeDeficienciesCount",
+                                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                                        color = if (activeDeficienciesCount > 0) Color(0xFFF0932B) else Color(0xFF2FA84F)
+                                    )
+                                    Text(
+                                        text = "nutrients",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(bottom = 3.dp)
+                                    )
+                                }
+                                
+                                // Mini visual label indicating severity mix
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(
+                                            if (activeDeficienciesCount > 0) {
+                                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                                            } else {
+                                                Color(0xFFE8F5E9)
+                                            }
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    Text(
+                                        text = if (activeDeficienciesCount > 0) {
+                                            "$severeDeficienciesCount critical (<50% RDA)"
+                                        } else {
+                                            "All RDA goals achieved!"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (activeDeficienciesCount > 0) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            Color(0xFF2E7D32)
+                                        }
+                                    )
+                                }
+                                
+                                Text(
+                                    text = "Falling below 100% daily RDA",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        thickness = 1.dp
+                    )
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Daily Backup & Portability",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    try {
+                                        val jsonString = viewModel.generateDailyReportJson(currentDate, currentDateEntries, dailyNutrients)
+                                        pendingJsonContent = jsonString
+                                        jsonLauncher.launch("nutriscribe-daily-nutrient-log-$currentDate.json")
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.testTag("dashboard_export_json_action_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Export JSON",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            TextButton(
+                                onClick = {
+                                    try {
+                                        val txtString = viewModel.generateDailyReportText(currentDate, currentDateEntries, dailyNutrients)
+                                        pendingTextContent = txtString
+                                        textLauncher.launch("nutriscribe-daily-nutrient-log-$currentDate.txt")
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.testTag("dashboard_export_txt_action_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Export Summary (TXT)",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            TextButton(
+                                onClick = {
+                                    try {
+                                        val htmlString = viewModel.generateDailyHtmlReport(currentDate, currentDateEntries, dailyNutrients)
+                                        pendingHtmlContent = htmlString
+                                        htmlLauncher.launch("nutriscribe-daily-nutrient-log-$currentDate.html")
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.testTag("dashboard_export_html_action_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Export Journal (HTML)",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            TextButton(
+                                onClick = {
+                                    try {
+                                        pendingPdfDate = currentDate
+                                        pendingPdfEntries = currentDateEntries
+                                        pendingPdfNutrients = dailyNutrients
+                                        dailyPdfLauncher.launch("nutriscribe-daily-nutrient-log-$currentDate.pdf")
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.testTag("dashboard_export_pdf_action_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Export Journal (PDF)",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            NutrientDeficiencyIndicatorPanel(viewModel = viewModel)
+        }
+
+        item {
+            DailyDeficiencyVisualAlerter(viewModel = viewModel)
+        }
+
+        item {
+            RdaCrossReferenceUtility(viewModel = viewModel)
+        }
+
+        item {
+            NutrientDataGrid(viewModel = viewModel)
+        }
+
+        // 80% RDA Deficiency Warning Notification
+        item {
+            val below80Warnings = remember(dailyNutrients) {
+                viewModel.checkNutrientLevelsAndGenerateWarnings(dailyNutrients)
+            }
+            var showDeficiencyNotification by remember { mutableStateOf(true) }
+            var isExpanded by remember { mutableStateOf(false) }
+
+            if (showDeficiencyNotification && below80Warnings.isNotEmpty()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rda_deficiency_warning_notification_card"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)
+                    ),
+                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.error.copy(alpha = 0.2f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = "RDA Warning Icon",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = "RDA Baseline Deficiencies",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    Text(
+                                        text = "Nutrients falling below 80% of dietary targets",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.error)
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "${below80Warnings.size} Alerts",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onError
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { showDeficiencyNotification = false },
+                                    modifier = Modifier.size(28.dp).testTag("dismiss_rda_warning_notification_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Dismiss Notification",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Text(
+                            text = "Based on your clinical intake profile, ${below80Warnings.size} nutritional target values are currently below 80% of your calibrated RDA limits for today. These gaps can impact optimal metabolic and physiological functions.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 16.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Brief collapsed summary
+                        if (!isExpanded) {
+                            TextButton(
+                                onClick = { isExpanded = true },
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.testTag("expand_rda_warnings_button")
+                            ) {
+                                Text(
+                                    text = "Show Details (${below80Warnings.take(3).joinToString { it.name } + if (below80Warnings.size > 3) "..." else ""})",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .padding(vertical = 8.dp)
+                                    .fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                below80Warnings.forEach { warning ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = warning.name,
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = warning.message.replace("Below Target: ", ""),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                            TextButton(
+                                onClick = { isExpanded = false },
+                                contentPadding = PaddingValues(0.dp),
+                                modifier = Modifier.testTag("collapse_rda_warnings_button")
+                            ) {
+                                Text(
+                                    text = "Hide Details",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Consecutive missed RDA alerts
+        if (consecutiveMissedAlerts.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("consecutive_missed_rda_alerts_card"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                              ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.error),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = "Alerts",
+                                        tint = MaterialTheme.colorScheme.onError,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "Nutrient RDA Alerts",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                            
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.error)
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "${consecutiveMissedAlerts.size} Missed",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = MaterialTheme.colorScheme.onError
+                                )
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Text(
+                            text = "You missed critical daily RDA thresholds for multiple consecutive days. Addressing these gaps helps maintain optimal metabolic balance:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                        
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            consecutiveMissedAlerts.forEach { alert ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
+                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = alert.nutrientName,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(MaterialTheme.colorScheme.error.copy(alpha = 0.12f))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = "${alert.consecutiveDays}D STREAK",
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.error
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = alert.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Nutritional Radar Chart Visualizer
+        item {
+            NutrientRadarChart(
+                dailyNutrients = dailyNutrients,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+
         // Calories Progress Card
         item {
             Card(
@@ -817,6 +2675,11 @@ fun DashboardTab(viewModel: NutritionViewModel) {
             }
         }
 
+        // Quick Food Search & Log Form Component
+        item {
+            FoodSearchQuickLogger(viewModel = viewModel)
+        }
+
         // Day Nutrition Insights Report Trigger Card
         item {
             Card(
@@ -878,6 +2741,203 @@ fun DashboardTab(viewModel: NutritionViewModel) {
             }
         }
 
+        // Export & Import Daily Nutrient Log JSON backups
+        item {
+            val importJsonLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument()
+            ) { uri ->
+                if (uri != null) {
+                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                                val jsonString = inputStream.bufferedReader().use { it.readText() }
+                                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    viewModel.importAnyNutritionalJson(jsonString) { success, msg ->
+                                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                android.widget.Toast.makeText(context, "Read failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+            }
+
+            fun shareNutrientLogJson(jsonStr: String) {
+                try {
+                    val sendIntent = android.content.Intent().apply {
+                        action = android.content.Intent.ACTION_SEND
+                        putExtra(android.content.Intent.EXTRA_TEXT, jsonStr)
+                        type = "application/json"
+                    }
+                    val shareIntent = android.content.Intent.createChooser(sendIntent, "Share Daily Nutrient Log (JSON)")
+                    context.startActivity(shareIntent)
+                } catch (e: Exception) {
+                    android.widget.Toast.makeText(context, "Sharing failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("export_daily_nutrient_log_composite_card"),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.2f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.secondary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Export and import daily nutrient log",
+                                tint = MaterialTheme.colorScheme.onSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Nutritional Log Sync & Backups",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                text = "Export, share, or upload/restore complete 41-nutrient JSON diaries",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                try {
+                                    val jsonString = viewModel.generateDailyReportJson(currentDate, currentDateEntries, dailyNutrients)
+                                    pendingJsonContent = jsonString
+                                    jsonLauncher.launch("nutriscribe-daily-nutrient-log-$currentDate.json")
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("button_export_daily_nutrient_log_json"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary,
+                                contentColor = MaterialTheme.colorScheme.onSecondary
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Export",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                try {
+                                    importJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(context, "Picker failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("button_import_daily_nutrient_log_json_action"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Import",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    val jsonString = viewModel.generateDailyReportJson(currentDate, currentDateEntries, dailyNutrients)
+                                    shareNutrientLogJson(jsonString)
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("button_share_daily_nutrient_log"),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
+                                Text(
+                                    text = "Share",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Macronutrients spread card
         item {
             Card(
@@ -900,51 +2960,7 @@ fun DashboardTab(viewModel: NutritionViewModel) {
                     Spacer(modifier = Modifier.height(16.dp))
 
                     if (macroSpread.totalCaloriesCalculated > 0) {
-                        // Stacked multi-color calorie progress bar
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(16.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                        ) {
-                            val carbsW = macroSpread.carbsPercent.toFloat()
-                            val protW = macroSpread.proteinPercent.toFloat()
-                            val fatW = macroSpread.fatPercent.toFloat()
-
-                            if (carbsW > 0) Box(modifier = Modifier.weight(carbsW).fillMaxHeight().background(Color(0xFF3897F5)))
-                            if (protW > 0) Box(modifier = Modifier.weight(protW).fillMaxHeight().background(Color(0xFFFF9800)))
-                            if (fatW > 0) Box(modifier = Modifier.weight(fatW).fillMaxHeight().background(Color(0xFF4CAF50)))
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            MacroIndicator(
-                                label = "Carbs",
-                                grams = macroSpread.carbsGrams,
-                                calories = macroSpread.carbsGrams * 4.0,
-                                percent = macroSpread.carbsPercent * 100,
-                                color = Color(0xFF3897F5)
-                            )
-                            MacroIndicator(
-                                label = "Protein",
-                                grams = macroSpread.proteinGrams,
-                                calories = macroSpread.proteinGrams * 4.0,
-                                percent = macroSpread.proteinPercent * 100,
-                                color = Color(0xFFFF9800)
-                            )
-                            MacroIndicator(
-                                label = "Fat",
-                                grams = macroSpread.fatGrams,
-                                calories = macroSpread.fatGrams * 9.0,
-                                percent = macroSpread.fatPercent * 100,
-                                color = Color(0xFF4CAF50)
-                            )
-                        }
+                        CaloricRechartsPieChart(macroSpread = macroSpread)
                     } else {
                         Box(
                             modifier = Modifier
@@ -965,7 +2981,12 @@ fun DashboardTab(viewModel: NutritionViewModel) {
             }
         }
 
-        // Daily Running Totals RDA Balance Planner
+        // Key Vitamins & Minerals RDA Progress Chart
+        item {
+            VitaminsMineralsRdaChart(dailyNutrients = dailyNutrients)
+        }
+
+        // Daily Running Totals RDA Balance Planner (Nutrition Summary Widget)
         item {
             Card(
                 modifier = Modifier.fillMaxWidth().testTag("rda_running_balance_card"),
@@ -979,29 +3000,146 @@ fun DashboardTab(viewModel: NutritionViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Daily RDA Balance Planner",
+                            text = "Daily Nutrition Summary (RDA Planner)",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1.0f)
                         )
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer)
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = "TARGETS",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        
+                        // Real-time color-coded Status Tag Notification
+                        if (exceededLimits.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFE53E3E))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = "Limit alerts active",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Text(
+                                        text = "${exceededLimits.size} OVER LIMIT",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF38A169))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Safe RDA limits",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Text(
+                                        text = "SAFE",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                        color = Color.White
+                                    )
+                                }
+                            }
                         }
                     }
                     Text(
                         text = "Review running totals compared with targets to decide your subsequent entries.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 16.dp)
+                        modifier = Modifier.padding(bottom = 12.dp)
                     )
+
+                    // Active Target Profile Banner
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f))
+                            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Active Target Profile",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Age $currentAge • $currentSex • $currentActivity",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        TextButton(
+                            onClick = { showRdaProfilerDialog = true },
+                            modifier = Modifier.testTag("open_rda_profiler_button")
+                        ) {
+                            Text(
+                                "Revise Target",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+
+                    // Real-time Exceeded Limits Alert Banner Block
+                    if (exceededLimits.isNotEmpty()) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 16.dp)
+                                .testTag("exceeded_limits_alert_banner"),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFFEF2F2)
+                            ),
+                            border = BorderStroke(1.dp, Color(0xFFFCA5A5))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = "Alert icon",
+                                        tint = Color(0xFF991B1B),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        text = "CRITICAL LIMIT EXCEEDED",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = Color(0xFF991B1B)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Your daily intake has exceeded recommended safety thresholds for: " + 
+                                            exceededLimits.joinToString(", ") { it.definition.name } + 
+                                            ". Take immediate action to restrict further ingestion of these elements today.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF7F1D1D)
+                                )
+                            }
+                        }
+                    }
 
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         displayNutrients.forEach { status ->
@@ -1010,10 +3148,11 @@ fun DashboardTab(viewModel: NutritionViewModel) {
                             val barColor = when {
                                 isLimit -> if (status.intake > def.rda) Color(0xFFE53E3E) else Color(0xFF319795)
                                 status.percentage >= 100.0 -> Color(0xFF38A169)
-                                status.percentage >= 50.0 -> Color(0xFFDD6B20)
+                                status.percentage >= 80.0 -> Color(0xFFDD6B20)
                                 else -> Color(0xFFE53E3E)
                             }
                             val progressFactor = (status.percentage / 100.0).toFloat().safeCoerce(0f, 1f)
+                            val isExceeded = isLimit && status.intake > def.rda
 
                             Column {
                                 Row(
@@ -1025,28 +3164,63 @@ fun DashboardTab(viewModel: NutritionViewModel) {
                                         Text(
                                             text = def.name,
                                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = MaterialTheme.colorScheme.onSurface
+                                            color = if (isExceeded) Color(0xFFE53E3E) else MaterialTheme.colorScheme.onSurface
                                         )
+                                        if (!isLimit && status.percentage < 80.0) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(Color(0xFFFFECEB))
+                                                    .border(1.dp, Color(0xFFFCA5A5), RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    .testTag("deficient_badge_${def.key}")
+                                            ) {
+                                                Text(
+                                                    text = "DEFICIENT",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                                                    color = Color(0xFFC53030)
+                                                )
+                                            }
+                                        }
                                         if (isLimit) {
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Box(
                                                 modifier = Modifier
                                                     .clip(RoundedCornerShape(4.dp))
-                                                    .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f))
-                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    .background(
+                                                        if (isExceeded) Color(0xFFE53E3E)
+                                                        else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                                                    )
+                                                    .padding(horizontal = 6.dp, vertical = 1.5.dp)
                                             ) {
-                                                Text(
-                                                    text = "UPPER LIMIT",
-                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
-                                                    color = MaterialTheme.colorScheme.error
-                                                )
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                ) {
+                                                    if (isExceeded) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Warning,
+                                                            contentDescription = "Alert",
+                                                            tint = Color.White,
+                                                            modifier = Modifier.size(8.dp)
+                                                        )
+                                                    }
+                                                    Text(
+                                                        text = if (isExceeded) "LIMIT EXCEEDED" else "UPPER LIMIT",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                                                        color = if (isExceeded) Color.White else MaterialTheme.colorScheme.error
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                     Text(
                                         text = "${status.intake.toInt()} / ${def.rda.toInt()} ${def.unit} (${status.percentage.toInt()}%)",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isExceeded) Color(0xFFE53E3E) else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     )
                                 }
 
@@ -1078,12 +3252,28 @@ fun DashboardTab(viewModel: NutritionViewModel) {
                                     }
                                 }
 
-                                Text(
-                                    text = balanceMessage,
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                    color = if (isLimit && status.intake > def.rda) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                                     modifier = Modifier.padding(top = 2.dp)
-                                )
+                                ) {
+                                    if (isExceeded) {
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = "Alert icon message",
+                                            tint = Color(0xFFE53E3E),
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = balanceMessage,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isExceeded) FontWeight.Bold else FontWeight.Normal
+                                        ),
+                                        color = if (isExceeded) Color(0xFFE53E3E) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    )
+                                }
                             }
                         }
                     }
@@ -1100,6 +3290,126 @@ fun DashboardTab(viewModel: NutritionViewModel) {
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary
                         )
+                    }
+                }
+            }
+        }
+
+        // AI-Powered Personalized Tips section
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp)
+                    .testTag("ai_personalized_tips_card"),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.15f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.25f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "AI Tips",
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Daily Personalized AI Tips",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        
+                        // Status indicator or Refresh button
+                        if (isAiLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        } else {
+                            IconButton(
+                                onClick = { viewModel.fetchAiPersonalizedTips(forceGemini = true) },
+                                modifier = Modifier.size(28.dp).testTag("refresh_ai_tips_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Refresh,
+                                    contentDescription = "Refresh tips",
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (isGeminiResponseActive) "Generated in real-time by Gemini 3.5 Flash Model." else "Prepared via fast-reference clinical model templates.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f)
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
+                    )
+
+                    if (isAiLoading && aiNutritionalTip == null) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "AI Nutritionist is evaluating your profile...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                    } else {
+                        // Display tip text
+                        val tipsText = aiNutritionalTip ?: "No deficiency warning tags active today. Keep up the clean baseline nutrition!"
+                        
+                        // Simple custom Bold helper rendered in annotated string
+                        val annotatedString = buildAnnotatedString {
+                            val parts = tipsText.split("**")
+                            parts.forEachIndexed { index, part ->
+                                if (index % 2 == 1) {
+                                    withStyle(style = SpanStyle(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.tertiary)) {
+                                        append(part)
+                                    }
+                                } else {
+                                    append(part)
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = annotatedString,
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 21.sp,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        
+                        if (aiError != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = aiError!!,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.testTag("ai_tips_error_text")
+                            )
+                        }
                     }
                 }
             }
@@ -1187,12 +3497,31 @@ fun DashboardTab(viewModel: NutritionViewModel) {
         // Deficiency & Exceeding Warnings List
         item {
             Column {
-                Text(
-                    text = "Daily Deficiencies & Risk Warners",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Daily Deficiencies & Risk Warners",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (warnings.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "${warnings.size} Alerts",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
 
                 if (warnings.isEmpty()) {
                     Card(
@@ -1221,35 +3550,376 @@ fun DashboardTab(viewModel: NutritionViewModel) {
                         }
                     }
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        warnings.forEach { warning ->
-                            val alertColor = if (warning.isExceededLimit) Color(0xFFE02424) else Color(0xFFF0932B)
-                            val alertBg = if (warning.isExceededLimit) Color(0xFFFDE8E8) else Color(0xFFFEF3C7)
-                            val alertBorder = if (warning.isExceededLimit) Color(0xFFFBD5D5) else Color(0xFFFDE68A)
-                            val textHex = if (warning.isExceededLimit) Color(0xFF9B1C1C) else Color(0xFF92400E)
+                    // Filter and Sort Warnings
+                    val processedWarnings = remember(warnings, warningFilterMode, warningSortMode) {
+                        var list = warnings
+                        if (warningFilterMode == 1) {
+                            list = list.filter { !it.isExceededLimit }
+                        } else if (warningFilterMode == 2) {
+                            list = list.filter { it.isExceededLimit }
+                        }
 
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = alertBg),
-                                border = BorderStroke(1.dp, alertBorder)
+                        if (warningSortMode == 1) {
+                            list = list.sortedBy { it.name }
+                        } else if (warningSortMode == 2) {
+                            list = list.sortedBy { it.group.name }
+                        } else {
+                            // Sort by severity (percentage ascending for deficiencies, percentage descending for excesses)
+                            list = list.sortedWith(compareBy<DeficiencyWarning> { it.isExceededLimit }
+                                .thenBy { if (!it.isExceededLimit) it.percentage else -it.percentage })
+                        }
+                        list
+                    }
+
+                    // Interactive Controls UI Panel
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Filter Selection
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Filter:",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(55.dp)
+                            )
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                listOf("All", "Deficits", "Excesses").forEachIndexed { index, label ->
+                                    val isSelected = warningFilterMode == index
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { warningFilterMode = index }
+                                            .padding(vertical = 6.dp)
+                                            .testTag("warning_filter_chip_$index"),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Sort Selection
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Sort:",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(55.dp)
+                            )
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf("Severity", "Name A-Z", "Group").forEachIndexed { index, label ->
+                                    val isSelected = warningSortMode == index
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { warningSortMode = index }
+                                            .padding(vertical = 6.dp)
+                                            .testTag("warning_sort_chip_$index"),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (processedWarnings.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No active warnings match this filter.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            processedWarnings.forEach { warning ->
+                                val alertColor = if (warning.isExceededLimit) Color(0xFFE02424) else Color(0xFFF0932B)
+                                val alertBg = if (warning.isExceededLimit) Color(0xFFFDE8E8) else Color(0xFFFEF3C7)
+                                val alertBorder = if (warning.isExceededLimit) Color(0xFFFBD5D5) else Color(0xFFFDE68A)
+                                val textHex = if (warning.isExceededLimit) Color(0xFF9B1C1C) else Color(0xFF92400E)
+
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().testTag("deficiency_warning_card_${warning.nutrientKey}"),
+                                    colors = CardDefaults.cardColors(containerColor = alertBg),
+                                    border = BorderStroke(1.dp, alertBorder)
                                 ) {
-                                    Icon(Icons.Default.Warning, contentDescription = null, tint = alertColor, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = warning.name + " alerts",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = textHex
-                                        )
-                                        Text(
-                                            text = warning.message,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = textHex.copy(alpha = 0.9f)
-                                        )
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Warning, contentDescription = null, tint = alertColor, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = warning.name + " alerts",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = textHex
+                                            )
+                                            Text(
+                                                text = warning.message,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = textHex.copy(alpha = 0.9f)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // AI-Powered Deficiency Corrective Food Advisor
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+                    .testTag("ai_food_suggestions_card"),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.12f)
+                ),
+                border = BorderStroke(
+                    width = 1.2.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // Title section
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "✨ AI Corrective Food Suggester",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        
+                        IconButton(
+                            onClick = { viewModel.fetchSuggestedFoodsForDeficiencies(forceGemini = true) },
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                .size(36.dp)
+                                .testTag("regenerate_food_suggestions_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Regenerate Suggestions",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "Based on your current logged food deficiencies for today, our Elite AI Clinical Nutritionist recommends these 5 high-density corrective foods to bring your levels back to target balance.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    // Error Notification if any
+                    suggestionsError?.let { err ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFDF2F2)),
+                            border = BorderStroke(1.dp, Color(0xFFFBD5D5)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "Alert",
+                                    tint = Color(0xFFE02424),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = err,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = Color(0xFF9B1C1C)
+                                )
+                            }
+                        }
+                    }
+
+                    if (isSuggestionsLoading) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(36.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 3.dp
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Consulting AI Clinical database...",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        if (targetSuggestedFoods.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Log food or click refresh to search for corrective suggestions.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                targetSuggestedFoods.forEachIndexed { index, item ->
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("food_suggestion_item_card_${index}"),
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(28.dp)
+                                                            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Text(
+                                                            text = "${index + 1}",
+                                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                        )
+                                                    }
+                                                    Text(
+                                                        text = item.foodName,
+                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                                // Badge for nutrition content
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f))
+                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text(
+                                                        text = item.contentMeasure,
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                    )
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.height(6.dp))
+
+                                            // Dense nutrients targeted
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Rich in:",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = item.denseNutrients,
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                    color = MaterialTheme.colorScheme.secondary
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(4.dp))
+
+                                            Text(
+                                                text = item.explanation,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1324,6 +3994,11 @@ fun DashboardTab(viewModel: NutritionViewModel) {
                 }
             }
         }
+
+        // 30-Day Interactive Trend Chart (Recharts style)
+        item {
+            Interactive30DayTrendsDashboardCard(viewModel = viewModel)
+        }
     }
 
     if (showReportDialog) {
@@ -1331,8 +4006,740 @@ fun DashboardTab(viewModel: NutritionViewModel) {
             currentDate = currentDate,
             dailyNutrients = dailyNutrients,
             macroSpread = macroSpread,
+            currentDateEntries = currentDateEntries,
+            viewModel = viewModel,
             onDismiss = { showReportDialog = false }
         )
+    }
+
+    if (showRdaProfilerDialog) {
+        RdaProfilerDialog(
+            viewModel = viewModel,
+            onDismiss = { showRdaProfilerDialog = false }
+        )
+    }
+}
+
+data class ThirtyDayNutrientPoint(
+    val dateString: String,
+    val displayDate: String,
+    val dayOfMonthLabel: String,
+    val intake: Double,
+    val rda: Double,
+    val percentage: Double
+)
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun Interactive30DayTrendsDashboardCard(viewModel: NutritionViewModel) {
+    val allLogEntries by viewModel.allLogEntries.collectAsState()
+    val customRdaOverrides by viewModel.customRdaOverrides.collectAsState()
+    
+    // Default selection is vitamin_c
+    var selectedNutrientKey by remember { mutableStateOf("vitamin_c") }
+    var selectedCategoryTab by remember { mutableStateOf("Vitamins") } // "Vitamins", "Minerals", "Macros", "Lipids"
+    
+    val currentNutrientDefinition = remember(selectedNutrientKey) {
+        com.example.data.Nutrients.DEFINITIONS.find { it.key == selectedNutrientKey } 
+            ?: com.example.data.Nutrients.DEFINITIONS.first()
+    }
+    
+    val targetRda = customRdaOverrides[selectedNutrientKey] ?: currentNutrientDefinition.rda
+    val unit = currentNutrientDefinition.unit
+    val nutrientName = currentNutrientDefinition.name
+
+    val macrosList = remember { listOf("calories", "protein", "carbohydrates", "fat", "fiber", "water") }
+    val lipidsList = remember { listOf("saturated_fat", "trans_fat", "monounsaturated_fat", "polyunsaturated_fat", "omega3", "omega6", "cholesterol") }
+    val vitaminsList = remember { listOf("vitamin_a", "vitamin_c", "vitamin_d", "vitamin_e", "vitamin_k", "thiamin", "riboflavin", "niacin", "pantothenic_acid", "vitamin_b6", "biotin", "folate", "vitamin_b12", "choline") }
+    val mineralsList = remember { listOf("calcium", "iron", "magnesium", "phosphorus", "potassium", "sodium", "zinc", "copper", "manganese", "selenium", "chromium", "molybdenum", "iodine") }
+
+    val currentKeysList = remember(selectedCategoryTab) {
+        when (selectedCategoryTab) {
+            "Macros" -> macrosList
+            "Lipids" -> lipidsList
+            "Vitamins" -> vitaminsList
+            "Minerals" -> mineralsList
+            else -> vitaminsList
+        }
+    }
+
+    // Dynamic color coding for beautiful Recharts-like dashboard aesthetics
+    val themeLineColor = remember(selectedCategoryTab) {
+        when (selectedCategoryTab) {
+            "Macros" -> Color(0xFF2563EB)     // Royal Blue
+            "Lipids" -> Color(0xFFE11D48)     // Crimson Coral
+            "Vitamins" -> Color(0xFFD97706)   // Golden Amber
+            "Minerals" -> Color(0xFF0D9488)   // Teal / Mint Green
+            else -> Color(0xFF9333EA)         // Soft Violet
+        }
+    }
+
+    // Build dates list for last 30 days starting with today and reversed for left-to-right chronological order
+    val last30Dates = remember(allLogEntries) {
+        val list = mutableListOf<String>()
+        val cal = java.util.Calendar.getInstance()
+        val format = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        for (i in 0 until 30) {
+            list.add(format.format(cal.time))
+            cal.add(java.util.Calendar.DATE, -1)
+        }
+        list.reverse()
+        list
+    }
+
+    // Aggregate nutrient data over 30 days
+    val trendPoints = remember(allLogEntries, last30Dates, selectedNutrientKey, targetRda) {
+        val groupedByDate = allLogEntries.groupBy { it.date }
+        val format = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val shortFormat = java.text.SimpleDateFormat("MMM dd", java.util.Locale.US)
+        val dayLabelFormat = java.text.SimpleDateFormat("d", java.util.Locale.US)
+        
+        last30Dates.map { dateStr ->
+            val dayEntries = groupedByDate[dateStr] ?: emptyList()
+            var sum = 0.0
+            for (entry in dayEntries) {
+                val valuePerServing = entry.nutrients[selectedNutrientKey] ?: 0.0
+                sum += valuePerServing * entry.quantity
+            }
+            val parsedDate = try { format.parse(dateStr) } catch (e: Exception) { null }
+            val displayDate = if (parsedDate != null) shortFormat.format(parsedDate) else ""
+            val dayLabel = if (parsedDate != null) dayLabelFormat.format(parsedDate) else ""
+            
+            ThirtyDayNutrientPoint(
+                dateString = dateStr,
+                displayDate = displayDate,
+                dayOfMonthLabel = dayLabel,
+                intake = sum,
+                rda = targetRda,
+                percentage = if (targetRda > 0.0) (sum / targetRda) * 100.0 else 0.0
+            )
+        }
+    }
+
+    // Summary statistics over the 30-day window
+    val avgIntake = remember(trendPoints) {
+        if (trendPoints.isEmpty()) 0.0 else trendPoints.map { it.intake }.average()
+    }
+    val maxIntake = remember(trendPoints) {
+        trendPoints.maxOfOrNull { it.intake } ?: 0.0
+    }
+    val minIntake = remember(trendPoints) {
+        trendPoints.minOfOrNull { it.intake } ?: 0.0
+    }
+    val compliantDays = remember(trendPoints, currentNutrientDefinition, targetRda) {
+        trendPoints.count { point ->
+            if (currentNutrientDefinition.isMaxLimit) {
+                point.intake <= targetRda
+            } else {
+                point.intake >= targetRda
+            }
+        }
+    }
+    val adherencePercent = remember(compliantDays) {
+        (compliantDays.toDouble() / 30.0 * 100.0).toInt()
+    }
+
+    var activeIndex by remember { mutableStateOf<Int?>(null) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("interactive_trends_dashboard_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "30-Day Trends Dashboard",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Interactive trends & biological metric tracking",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = "Report Info",
+                    tint = themeLineColor,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // Category Tabs Selection Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                listOf("Macros", "Lipids", "Vitamins", "Minerals").forEach { tab ->
+                    val isSelected = selectedCategoryTab == tab
+                    val tabBgColor = if (isSelected) themeLineColor else Color.Transparent
+                    val tabTxtColor = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(tabBgColor)
+                            .clickable {
+                                selectedCategoryTab = tab
+                                // Automatically switch selected nutrient to first in list to avoid index mismatch
+                                when (tab) {
+                                    "Macros" -> selectedNutrientKey = macrosList.first()
+                                    "Lipids" -> selectedNutrientKey = lipidsList.first()
+                                    "Vitamins" -> selectedNutrientKey = vitaminsList.first()
+                                    "Minerals" -> selectedNutrientKey = mineralsList.first()
+                                }
+                            }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = tab,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = tabTxtColor
+                        )
+                    }
+                }
+            }
+
+            // Horizontal Pill Scroll of Nutrients in Group
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(bottom = 2.dp)
+            ) {
+                items(currentKeysList) { key ->
+                    val isSelected = selectedNutrientKey == key
+                    val def = com.example.data.Nutrients.DEFINITIONS.find { it.key == key }
+                    val label = def?.name ?: key
+                    
+                    val chipBgColor = if (isSelected) themeLineColor.copy(alpha = 0.12f) else Color.Transparent
+                    val chipBorderColor = if (isSelected) themeLineColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                    val chipTextColor = if (isSelected) themeLineColor else MaterialTheme.colorScheme.onSurfaceVariant
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(chipBgColor)
+                            .border(BorderStroke(1.2.dp, chipBorderColor), RoundedCornerShape(20.dp))
+                            .clickable { selectedNutrientKey = key }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (isSelected) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(themeLineColor)
+                                )
+                            }
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = chipTextColor
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Brief Clinical Definition panel
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = themeLineColor.copy(alpha = 0.05f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(themeLineColor.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (currentNutrientDefinition.isMaxLimit) "⚠️" else "✨",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "$nutrientName Definition & Targets",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = themeLineColor
+                        )
+                        Text(
+                            text = currentNutrientDefinition.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Recharts-inspired Interactive Canvas Chart
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(240.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                    .border(BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)), RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                val totalWidth = maxWidth
+                val totalHeight = maxHeight
+                
+                val leftMargin = 45.dp
+                val rightMargin = 12.dp
+                val topMargin = 20.dp
+                val bottomMargin = 28.dp
+                
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                val leftMarginPx = with(density) { leftMargin.toPx() }
+                val rightMarginPx = with(density) { rightMargin.toPx() }
+                val topMarginPx = with(density) { topMargin.toPx() }
+                val bottomMarginPx = with(density) { bottomMargin.toPx() }
+                
+                val drawW = totalWidth - leftMargin - rightMargin
+                val drawH = totalHeight - topMargin - bottomMargin
+                
+                val drawWPx = with(density) { drawW.toPx() }
+                val drawHPx = with(density) { drawH.toPx() }
+                
+                val maxIntakeValue = trendPoints.maxOfOrNull { it.intake } ?: 0.0
+                val upperYLimit = maxOf(maxIntakeValue, targetRda) * 1.25
+                val maxVal = if (upperYLimit <= 0.0) 100.0 else upperYLimit
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(trendPoints) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    val xFraction = ((offset.x - leftMarginPx) / drawWPx).coerceIn(0f, 1f)
+                                    activeIndex = (xFraction * (trendPoints.size - 1)).toInt().coerceIn(0, trendPoints.size - 1)
+                                },
+                                onDrag = { change, _ ->
+                                    val xFraction = ((change.position.x - leftMarginPx) / drawWPx).coerceIn(0f, 1f)
+                                    activeIndex = (xFraction * (trendPoints.size - 1)).toInt().coerceIn(0, trendPoints.size - 1)
+                                },
+                                onDragEnd = { activeIndex = null },
+                                onDragCancel = { activeIndex = null }
+                            )
+                        }
+                        .pointerInput(trendPoints) {
+                            detectTapGestures(
+                                onPress = { offset ->
+                                    val xFraction = ((offset.x - leftMarginPx) / drawWPx).coerceIn(0f, 1f)
+                                    val index = (xFraction * (trendPoints.size - 1)).toInt().coerceIn(0, trendPoints.size - 1)
+                                    activeIndex = index
+                                    tryAwaitRelease()
+                                    activeIndex = null
+                                }
+                            )
+                        }
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        // 1. Draw Dashed Grid Lines (Grid background)
+                        val stepCount = 4
+                        for (q in 0..stepCount) {
+                            val fraction = q.toFloat() / stepCount.toFloat()
+                            val gridY = topMarginPx + drawHPx - (fraction * drawHPx)
+                            
+                            drawLine(
+                                color = Color.LightGray.copy(alpha = 0.4f),
+                                start = Offset(leftMarginPx, gridY),
+                                end = Offset(leftMarginPx + drawWPx, gridY),
+                                strokeWidth = 1.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 12f))
+                            )
+                        }
+                        
+                        // 2. Draw RDA Target reference limit (Pinkish dashed guideline)
+                        if (targetRda > 0.0) {
+                            val rdaFraction = (targetRda / maxVal).coerceIn(0.0, 1.0).toFloat()
+                            val rdaY = topMarginPx + drawHPx - (rdaFraction * drawHPx)
+                            drawLine(
+                                color = Color(0xFFEF5350), // clinical red
+                                start = Offset(leftMarginPx, rdaY),
+                                end = Offset(leftMarginPx + drawWPx, rdaY),
+                                strokeWidth = 1.5.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)) // dashed
+                            )
+                        }
+                        
+                        // 3. Draw the area field gradient and stroke line
+                        if (trendPoints.isNotEmpty()) {
+                            val path = Path()
+                            val fillPath = Path()
+                            
+                            trendPoints.forEachIndexed { idx, point ->
+                                val x = leftMarginPx + idx * (drawWPx / (trendPoints.size - 1))
+                                val pointFraction = (point.intake / maxVal).coerceIn(0.0, 1.0).toFloat()
+                                val y = topMarginPx + drawHPx - (pointFraction * drawHPx)
+                                
+                                if (idx == 0) {
+                                    path.moveTo(x, y)
+                                    fillPath.moveTo(x, topMarginPx + drawHPx)
+                                    fillPath.lineTo(x, y)
+                                } else {
+                                    path.lineTo(x, y)
+                                    fillPath.lineTo(x, y)
+                                }
+                            }
+                            
+                            fillPath.lineTo(leftMarginPx + drawWPx, topMarginPx + drawHPx)
+                            fillPath.close()
+                            
+                            // Draw underlying area shading gradient
+                            drawPath(
+                                path = fillPath,
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(
+                                        themeLineColor.copy(alpha = 0.28f),
+                                        themeLineColor.copy(alpha = 0.00f)
+                                    ),
+                                    startY = topMarginPx,
+                                    endY = topMarginPx + drawHPx
+                                )
+                            )
+                            
+                            // Draw top curve line strike
+                            drawPath(
+                                path = path,
+                                color = themeLineColor,
+                                style = Stroke(
+                                    width = 2.5.dp.toPx(),
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                            
+                            // Draw small circular points
+                            trendPoints.forEachIndexed { idx, point ->
+                                if (idx % 2 == 0) { // every other day to avoid cluttering 30 points
+                                    val x = leftMarginPx + idx * (drawWPx / (trendPoints.size - 1))
+                                    val pointFraction = (point.intake / maxVal).coerceIn(0.0, 1.0).toFloat()
+                                    val y = topMarginPx + drawHPx - (pointFraction * drawHPx)
+                                    drawCircle(
+                                        color = themeLineColor,
+                                        radius = 2.dp.toPx(),
+                                        center = Offset(x, y)
+                                    )
+                                }
+                            }
+                        }
+                        
+                        // 4. Draw active vertical hover line and target pointer highlight
+                        if (activeIndex != null) {
+                            val activePoint = trendPoints.getOrNull(activeIndex!!)
+                            if (activePoint != null) {
+                                val x = leftMarginPx + activeIndex!! * (drawWPx / (trendPoints.size - 1))
+                                
+                                // Draw high-fidelity cursor line, matching Recharts
+                                drawLine(
+                                    color = themeLineColor.copy(alpha = 0.4f),
+                                    start = Offset(x, topMarginPx),
+                                    end = Offset(x, topMarginPx + drawHPx),
+                                    strokeWidth = 1.dp.toPx()
+                                )
+                                
+                                val pointFraction = (activePoint.intake / maxVal).coerceIn(0.0, 1.0).toFloat()
+                                val y = topMarginPx + drawHPx - (pointFraction * drawHPx)
+                                
+                                // Concentric highlight rings
+                                drawCircle(
+                                    color = themeLineColor.copy(alpha = 0.22f),
+                                    radius = 9.dp.toPx(),
+                                    center = Offset(x, y)
+                                )
+                                drawCircle(
+                                    color = Color.White,
+                                    radius = 4.5.dp.toPx(),
+                                    center = Offset(x, y)
+                                )
+                                drawCircle(
+                                    color = themeLineColor,
+                                    radius = 3.dp.toPx(),
+                                    style = Stroke(width = 1.5.dp.toPx()),
+                                    center = Offset(x, y)
+                                )
+                            }
+                        }
+                    }
+                    
+                    // Real-time Text overlays (Y Axis labels) on top of Canvas
+                    Column(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(leftMargin)
+                            .padding(top = topMargin, bottom = bottomMargin),
+                        verticalArrangement = Arrangement.SpaceBetween,
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        val labelFormatStr = if (maxVal >= 1000) "%.0f" else if (maxVal >= 10) "%.1f" else "%.2f"
+                        for (q in 4 downTo 0) {
+                            val fraction = q.toFloat() / 4f
+                            val labelVal = maxVal * fraction
+                            Text(
+                                text = String.format(java.util.Locale.US, labelFormatStr, labelVal) + " ",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.5.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                maxLines = 1
+                            )
+                            if (q > 0) Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                    
+                    // Calendar Day numbers along the X axis
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomStart)
+                            .padding(start = leftMargin, end = rightMargin)
+                            .height(bottomMargin),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        trendPoints.forEachIndexed { index, point ->
+                            if (index == 0 || index == 9 || index == 19 || index == 29) {
+                                Text(
+                                    text = if (index == 0) "Day 1" else "Day ${index + 1}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            } else if (index == 4 || index == 14 || index == 24) {
+                                // optional micro index ticks
+                                Box(modifier = Modifier.size(1.dp))
+                            } else {
+                                Box(modifier = Modifier.size(1.dp))
+                            }
+                        }
+                    }
+                    
+                    // Floating Tooltip Modal
+                    if (activeIndex != null) {
+                        val activePoint = trendPoints.getOrNull(activeIndex!!)
+                        if (activePoint != null) {
+                            val isLeftHalf = activeIndex!! < 15
+                            
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = leftMargin + 8.dp, end = rightMargin + 8.dp, top = topMargin)
+                            ) {
+                                Card(
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    border = BorderStroke(1.dp, themeLineColor.copy(alpha = 0.3f)),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                                    modifier = Modifier
+                                        .align(if (isLeftHalf) Alignment.TopEnd else Alignment.TopStart)
+                                        .width(180.dp)
+                                        .padding(horizontal = 4.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text(
+                                            text = activePoint.displayDate,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(6.dp)
+                                                    .clip(CircleShape)
+                                                    .background(themeLineColor)
+                                            )
+                                            Text(
+                                                text = "$nutrientName: ",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                        Text(
+                                            text = "${activePoint.intake.format(1)} $unit",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = themeLineColor
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        val percentString = if (activePoint.percentage % 1.0 == 0.0) "${activePoint.percentage.toInt()}%" else String.format(java.util.Locale.US, "%.1f%%", activePoint.percentage)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Progress: ",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = percentString,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp, fontWeight = FontWeight.Bold),
+                                                color = if (currentNutrientDefinition.isMaxLimit) {
+                                                    if (activePoint.intake > targetRda) Color(0xFFC62828) else Color(0xFF2E7D32)
+                                                } else {
+                                                    if (activePoint.percentage < 75.0) Color(0xFFE65100) else Color(0xFF2E7D32)
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Legend Rows
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(12.dp)
+                            .height(4.dp)
+                            .background(themeLineColor, RoundedCornerShape(2.dp))
+                    )
+                    Text(
+                        text = "Aggregated Intake",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(12.dp)
+                            .height(1.5.dp)
+                            .background(Color(0xFFEF5350))
+                    )
+                    Text(
+                        text = if (currentNutrientDefinition.isMaxLimit) "Max Clinical Ceiling Level" else "Standard Target RDA Line",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+
+            // 4 KPI Stats Grid Cards bottom (Summary statistics)
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Avg Intake
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("30-Day Avg", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${avgIntake.format(1)} $unit",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = themeLineColor
+                            )
+                        }
+                    }
+                    // Max Intake
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("30-Day Peak", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${maxIntake.format(1)} $unit",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Min Intake
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("30-Day Lowest", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${minIntake.format(1)} $unit",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    // Adherence / Target Met frequency
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            val adherenceLabel = if (currentNutrientDefinition.isMaxLimit) "Ceiling Safe Days" else "RDA Target Met"
+                            Text(adherenceLabel, style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "$adherencePercent%",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = if (adherencePercent >= 80) Color(0xFF2E7D32) else if (adherencePercent >= 50) Color(0xFFE65100) else Color(0xFFC62828)
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1373,13 +4780,3189 @@ fun MacroIndicator(label: String, grams: Double, calories: Double, percent: Doub
     }
 }
 
+data class CaloricPieSlice(
+    val label: String,
+    val grams: Double,
+    val calories: Double,
+    val percentage: Double,
+    val color: Color
+)
+
 @Composable
-fun JournalTab(viewModel: NutritionViewModel) {
+fun CaloricRechartsPieChart(
+    macroSpread: MacroSpreadRatio,
+    modifier: Modifier = Modifier
+) {
+    val carbsG = macroSpread.carbsGrams
+    val protG = macroSpread.proteinGrams
+    val fatG = macroSpread.fatGrams
+
+    val carbsC = carbsG * 4.0
+    val protC = protG * 4.0
+    val fatC = fatG * 9.0
+    val totalC = macroSpread.totalCaloriesCalculated
+
+    val slices = remember(carbsG, protG, fatG, carbsC, protC, fatC, totalC) {
+        if (totalC > 0.0) {
+            listOf(
+                CaloricPieSlice("Carbs", carbsG, carbsC, (carbsC / totalC) * 100.0, Color(0xFF3897F5)),
+                CaloricPieSlice("Protein", protG, protC, (protC / totalC) * 100.0, Color(0xFFFF9800)),
+                CaloricPieSlice("Fat", fatG, fatC, (fatC / totalC) * 100.0, Color(0xFF4CAF50))
+            )
+        } else {
+            emptyList()
+        }
+    }
+
+    var selectedIndex by remember { mutableStateOf(-1) }
+
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val isWide = maxWidth >= 480.dp
+        
+        if (isWide) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Circular Chart
+                PieChartRender(
+                    slices = slices,
+                    totalCalories = totalC,
+                    selectedIndex = selectedIndex,
+                    onSliceSelect = { index -> selectedIndex = index }
+                )
+
+                Spacer(modifier = Modifier.width(24.dp))
+
+                // Interactive Legends aligned vertically
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    slices.forEachIndexed { index, slice ->
+                        InteractiveLegendRow(
+                            slice = slice,
+                            isSelected = selectedIndex == index,
+                            onClick = {
+                                selectedIndex = if (selectedIndex == index) -1 else index
+                            }
+                        )
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Circular Chart
+                PieChartRender(
+                    slices = slices,
+                    totalCalories = totalC,
+                    selectedIndex = selectedIndex,
+                    onSliceSelect = { index -> selectedIndex = index }
+                )
+
+                // Interactive Legends aligned grid/row-wise
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    slices.forEachIndexed { index, slice ->
+                        InteractiveLegendCompact(
+                            slice = slice,
+                            isSelected = selectedIndex == index,
+                            onClick = {
+                                selectedIndex = if (selectedIndex == index) -1 else index
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PieChartRender(
+    slices: List<CaloricPieSlice>,
+    totalCalories: Double,
+    selectedIndex: Int,
+    onSliceSelect: (Int) -> Unit
+) {
+    val totalC = totalCalories
+    val gapDegrees = 3f
+    val activeSlicesCount = slices.filter { it.percentage > 0.0 }.size
+    val totalGaps = activeSlicesCount * gapDegrees
+    val availableDegrees = 360f - totalGaps
+
+    Box(
+        modifier = Modifier.size(175.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(slices, availableDegrees) {
+                    detectTapGestures { tapOffset ->
+                        if (totalC == 0.0 || slices.isEmpty()) return@detectTapGestures
+                        val centerOffset = Offset(size.width / 2f, size.height / 2f)
+                        val dx = tapOffset.x - centerOffset.x
+                        val dy = tapOffset.y - centerOffset.y
+                        val distance = Math.hypot(dx.toDouble(), dy.toDouble())
+                        val outerRadius = size.width / 2f
+                        val innerRadius = outerRadius - 35f // ring area width
+                        if (distance in innerRadius..outerRadius + 15f) {
+                            var angle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                            if (angle < 0) angle += 360f
+                            val adjustedAngle = (angle + 90f) % 360f
+
+                            var tempStart = 0f
+                            var clickedIdx = -1
+                            for (i in slices.indices) {
+                                val slice = slices[i]
+                                if (slice.percentage <= 0.0) continue
+                                val sweep = (slice.percentage.toFloat() / 100f) * availableDegrees
+                                val endAngle = tempStart + sweep + gapDegrees
+                                if (adjustedAngle >= tempStart && adjustedAngle < endAngle - gapDegrees) {
+                                    clickedIdx = i
+                                    break
+                                }
+                                tempStart = endAngle
+                            }
+                            if (clickedIdx != -1) {
+                                onSliceSelect(clickedIdx)
+                            }
+                        } else {
+                            onSliceSelect(-1)
+                        }
+                    }
+                }
+        ) {
+            val centerOffset = Offset(size.width / 2f, size.height / 2f)
+            val strokeWidth = 22.dp.toPx()
+            val radius = (size.width - strokeWidth) / 2f
+
+            if (totalC == 0.0 || slices.isEmpty()) {
+                drawArc(
+                    color = Color.LightGray.copy(alpha = 0.4f),
+                    startAngle = 0f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    style = Stroke(width = strokeWidth)
+                )
+            } else {
+                var startAngleAccumulating = -90f
+                slices.forEachIndexed { index, slice ->
+                    if (slice.percentage > 0.0) {
+                        val sweep = (slice.percentage.toFloat() / 100f) * availableDegrees
+                        val isSelected = selectedIndex == index
+                        val currentStrokeWidth = if (isSelected) strokeWidth + 6.dp.toPx() else strokeWidth
+                        val drawRadius = if (isSelected) radius + 3.dp.toPx() else radius
+
+                        drawArc(
+                            color = slice.color,
+                            startAngle = startAngleAccumulating,
+                            sweepAngle = sweep,
+                            useCenter = false,
+                            topLeft = Offset(centerOffset.x - drawRadius, centerOffset.y - drawRadius),
+                            size = androidx.compose.ui.geometry.Size(drawRadius * 2f, drawRadius * 2f),
+                            style = Stroke(width = currentStrokeWidth, cap = StrokeCap.Round)
+                        )
+                        startAngleAccumulating += sweep + gapDegrees
+                    }
+                }
+            }
+        }
+
+        // Center Content Overlay in the Donut Hole
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(20.dp)
+        ) {
+            val activeSlice = if (selectedIndex in slices.indices) slices[selectedIndex] else null
+            if (activeSlice != null) {
+                Text(
+                    text = activeSlice.label,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = activeSlice.color
+                )
+                Text(
+                    text = "${activeSlice.grams.toInt()}g",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "${activeSlice.percentage.toInt()}% (${activeSlice.calories.toInt()} kcal)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    text = "Total Caloric",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "${totalC.toInt()}",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "kcal logged",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun InteractiveLegendRow(
+    slice: CaloricPieSlice,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .testTag("legend_row_${slice.label.lowercase()}"),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) slice.color.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+        ),
+        border = BorderStroke(
+            width = if (isSelected) 1.5.dp else 0.5.dp,
+            color = if (isSelected) slice.color else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(slice.color)
+                )
+                Text(
+                    text = slice.label,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "${slice.grams.toInt()}g (${slice.percentage.toInt()}%)",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "${slice.calories.toInt()} kcal",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun InteractiveLegendCompact(
+    slice: CaloricPieSlice,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .background(if (isSelected) slice.color.copy(alpha = 0.1f) else Color.Transparent)
+            .border(
+                width = if (isSelected) 1.dp else 0.dp,
+                color = if (isSelected) slice.color else Color.Transparent,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(slice.color)
+            )
+            Text(
+                text = slice.label,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = "${slice.grams.toInt()}g",
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = "${slice.percentage.toInt()}%",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+
+@Composable
+fun CustomNutrientFoodForm(viewModel: NutritionViewModel) {
+    var foodName by remember { mutableStateOf("") }
+    var quantityText by remember { mutableStateOf("1.0") }
+    var unitText by remember { mutableStateOf("serving") }
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
+    var selectedMeal by remember { mutableStateOf("Lunch") }
+    
+    // Quick Add Search Dropdown states
+    var quickAddSearchQuery by remember { mutableStateOf("") }
+    var isQuickAddDropdownExpanded by remember { mutableStateOf(false) }
+    
+    // Search within nutrient values
+    var nutrientSearchQuery by remember { mutableStateOf("") }
+    
+    // Nutrient input values map
+    val nutrientInputValues = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
+    
+    // All available nutrient definitions from the local JSON database (Nutrients.DEFINITIONS)
+    val allNutrientDefs = remember { com.example.data.Nutrients.DEFINITIONS }
+    
+    // Expanded groups state
+    val expandedGroups = remember { androidx.compose.runtime.mutableStateMapOf<com.example.data.NutrientGroup, Boolean>().apply {
+        com.example.data.NutrientGroup.values().forEach { group ->
+            this[group] = (group == com.example.data.NutrientGroup.MACROS) // start with MACROS expanded
+        }
+    } }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("custom_nutrient_food_form_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+        ),
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Custom Nutrient Form",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Column {
+                    Text(
+                        text = "Detailed Nutrient Food Logger",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Log precise food items with accurate nutrient profiles loaded from the local JSON reference database",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Searchable 'Quick Add' dropdown from local JSON database catalog
+            Text(
+                text = "⚡ Search & Quick Add from Catalog:",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("quick_add_dropdown_container")
+            ) {
+                OutlinedTextField(
+                    value = quickAddSearchQuery,
+                    onValueChange = {
+                        quickAddSearchQuery = it
+                        isQuickAddDropdownExpanded = true
+                    },
+                    label = { Text("Search common foods...", style = MaterialTheme.typography.labelMedium) },
+                    placeholder = { Text("e.g. Eggs, Oatmeal, Salmon, Pasta") },
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search Foods",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    },
+                    trailingIcon = {
+                        if (quickAddSearchQuery.isNotEmpty()) {
+                            IconButton(onClick = {
+                                quickAddSearchQuery = ""
+                                isQuickAddDropdownExpanded = false
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear Search",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        } else {
+                            IconButton(onClick = {
+                                isQuickAddDropdownExpanded = !isQuickAddDropdownExpanded
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = "Toggle Dropdown",
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("quick_add_food_search_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.secondary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+
+                // Match query
+                val filteredFoods = remember(quickAddSearchQuery) {
+                    if (quickAddSearchQuery.isBlank()) {
+                        com.example.data.FoodLookupDatabase.ITEMS
+                    } else {
+                        com.example.data.FoodLookupDatabase.ITEMS.filter {
+                            it.name.contains(quickAddSearchQuery, ignoreCase = true) ||
+                            it.category.contains(quickAddSearchQuery, ignoreCase = true)
+                        }
+                    }
+                }
+
+                DropdownMenu(
+                    expanded = isQuickAddDropdownExpanded && filteredFoods.isNotEmpty(),
+                    onDismissRequest = { isQuickAddDropdownExpanded = false },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 280.dp)
+                        .background(MaterialTheme.colorScheme.surface)
+                        .testTag("quick_add_results_menu")
+                ) {
+                    filteredFoods.forEach { food ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(text = food.emoji, style = MaterialTheme.typography.titleMedium)
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = food.name,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "${food.category} • ${food.servingSize}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    // Accented calories tag
+                                    val calVal = food.nutrients["calories"]
+                                    if (calVal != null) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(MaterialTheme.colorScheme.secondaryContainer)
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "${calVal.toInt()} kcal",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            onClick = {
+                                foodName = food.name
+                                unitText = food.servingSize
+                                if (food.category in mealTypes) {
+                                    selectedMeal = food.category
+                                }
+                                // Prefill the nutrients map
+                                nutrientInputValues.clear()
+                                food.nutrients.forEach { (key, value) ->
+                                    if (value > 0.0) {
+                                        nutrientInputValues[key] = value.toString()
+                                    }
+                                }
+                                quickAddSearchQuery = ""
+                                isQuickAddDropdownExpanded = false
+                                android.widget.Toast.makeText(context, "Loaded ${food.emoji} ${food.name} nutrient data!", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Food Name Field
+            OutlinedTextField(
+                value = foodName,
+                onValueChange = { foodName = it },
+                label = { Text("Food Name", style = MaterialTheme.typography.labelMedium) },
+                placeholder = { Text("e.g. Premium Whey shake, Keto Salad") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("custom_food_name_input"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Portion / Serving size & Unit
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = quantityText,
+                    onValueChange = { newValue ->
+                        if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                            quantityText = newValue
+                        }
+                    },
+                    label = { Text("Quantity", style = MaterialTheme.typography.labelMedium) },
+                    placeholder = { Text("1.0") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("custom_food_quantity_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+
+                OutlinedTextField(
+                    value = unitText,
+                    onValueChange = { unitText = it },
+                    label = { Text("Measurement Unit", style = MaterialTheme.typography.labelMedium) },
+                    placeholder = { Text("serving, g, scoop") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("custom_food_unit_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Meal Selector
+            Text(
+                text = "Meal Category:",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                mealTypes.forEach { type ->
+                    val isSelected = selectedMeal == type
+                    val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent
+
+                    Surface(
+                        onClick = { selectedMeal = type },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .testTag("custom_food_meal_chip_$type"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = containerColor,
+                        contentColor = contentColor,
+                        border = if (isSelected) BorderStroke(1.dp, borderColor) else null
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Text(
+                                text = type,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Nutrient Values section
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Specify Nutritional Composition:",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.secondary
+            )
+            Text(
+                text = "Enter numerical target content for this item. Unspecified values will be recorded as 0.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+
+            // Search Filter across all 41 nutrients
+            OutlinedTextField(
+                value = nutrientSearchQuery,
+                onValueChange = { nutrientSearchQuery = it },
+                label = { Text("Filter 41 Reference Nutrients...", style = MaterialTheme.typography.labelMedium) },
+                placeholder = { Text("e.g. Vitamin, Iron, Calcium, Fiber") },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("custom_food_nutrient_search"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.secondary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Box/Column container with fixed size or natural size, styled for custom scroll flow
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 280.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                val scrollState = rememberScrollState()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(scrollState),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (nutrientSearchQuery.isNotBlank()) {
+                        // Filtered view ignoring categories groups
+                        val filteredList = allNutrientDefs.filter {
+                            it.name.contains(nutrientSearchQuery, ignoreCase = true) ||
+                            it.key.contains(nutrientSearchQuery, ignoreCase = true) ||
+                            it.group.displayName.contains(nutrientSearchQuery, ignoreCase = true)
+                        }
+
+                        if (filteredList.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("No nutrients match your search", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        } else {
+                            filteredList.forEach { def ->
+                                NutrientInputRow(def = def, valueState = nutrientInputValues)
+                            }
+                        }
+                    } else {
+                        // Grouped categorized view
+                        com.example.data.NutrientGroup.values().forEach { group ->
+                            val groupNutrients = allNutrientDefs.filter { it.group == group }
+                            val isExpanded = expandedGroups[group] ?: false
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f))
+                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                            ) {
+                                // Group Header
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { expandedGroups[group] = !isExpanded }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier
+                                                .size(18.dp)
+                                                .rotate(if (isExpanded) 0f else -90f)
+                                        )
+                                        Text(
+                                            text = group.displayName,
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
+                                    
+                                    // Show mini status (how many items filled)
+                                    val countFilled = groupNutrients.count { nutrientInputValues[it.key]?.isNotBlank() == true && (nutrientInputValues[it.key]?.toDoubleOrNull() ?: 0.0) > 0.0 }
+                                    if (countFilled > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(MaterialTheme.colorScheme.secondary)
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "$countFilled filled",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSecondary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (isExpanded) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        groupNutrients.forEach { def ->
+                                            NutrientInputRow(def = def, valueState = nutrientInputValues)
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Action Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = {
+                        foodName = ""
+                        quantityText = "1.0"
+                        unitText = "serving"
+                        nutrientInputValues.clear()
+                        nutrientSearchQuery = ""
+                    },
+                    modifier = Modifier.testTag("custom_food_clear_button")
+                ) {
+                    Text("Clear Fields")
+                }
+
+                Button(
+                    onClick = {
+                        val quantity = quantityText.toDoubleOrNull() ?: 1.0
+                        
+                        // Parse mapped nutrient double values
+                        val mappedNutrients = mutableMapOf<String, Double>()
+                        allNutrientDefs.forEach { def ->
+                            val rawText = nutrientInputValues[def.key]
+                            if (rawText != null) {
+                                val parsedVal = rawText.toDoubleOrNull()
+                                if (parsedVal != null && parsedVal > 0.0) {
+                                    mappedNutrients[def.key] = parsedVal
+                                }
+                            }
+                        }
+
+                        // Save!
+                        viewModel.insertDirectFoodLogEntry(
+                            foodName = foodName,
+                            mealType = selectedMeal,
+                            quantity = quantity,
+                            unit = unitText,
+                            nutrients = mappedNutrients
+                        )
+
+                        // Clear inputs upon success
+                        foodName = ""
+                        quantityText = "1.0"
+                        nutrientInputValues.clear()
+                        Toast.makeText(context, "Logged fully structured custom food!", Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = foodName.isNotBlank(),
+                    modifier = Modifier.testTag("custom_food_submit_button")
+                ) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Log Food & Nutrients", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NutrientInputRow(
+    def: com.example.data.NutrientDefinition,
+    valueState: MutableMap<String, String>
+) {
+    val textValue = valueState[def.key] ?: ""
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Column(modifier = Modifier.weight(1.3f)) {
+            Text(
+                text = def.name,
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "RDA target: ${def.rda.toInt()} ${def.unit}",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            )
+        }
+
+        OutlinedTextField(
+            value = textValue,
+            onValueChange = { newValue ->
+                if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                    valueState[def.key] = newValue
+                }
+            },
+            placeholder = { Text("0", style = MaterialTheme.typography.bodySmall) },
+            suffix = {
+                Text(
+                    text = def.unit,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodySmall,
+            modifier = Modifier
+                .width(110.dp)
+                .testTag("custom_food_nutrient_input_${def.key}"),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+            )
+        )
+    }
+}
+
+
+@Composable
+fun ManualLocalStorageForm(viewModel: NutritionViewModel) {
+    val manualLogs by viewModel.manualFoodLogs.collectAsState()
+    
+    var foodName by remember { mutableStateOf("") }
+    var servingSizeText by remember { mutableStateOf("1.0") }
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
+    var selectedMeal by remember { mutableStateOf("Lunch") }
+    var showStoredLogs by remember { mutableStateOf(false) }
+    var editingLog by remember { mutableStateOf<ManualFoodLog?>(null) }
+    var logToDelete by remember { mutableStateOf<ManualFoodLog?>(null) }
+
+    val calendar = remember { Calendar.getInstance() }
+    var useCustomTimestamp by remember { mutableStateOf(false) }
+    var customHour by remember { mutableStateOf(SimpleDateFormat("h", Locale.US).format(calendar.time)) }
+    var customMinute by remember { mutableStateOf(SimpleDateFormat("mm", Locale.US).format(calendar.time)) }
+    var customIsAm by remember { mutableStateOf(calendar.get(Calendar.AM_PM) == Calendar.AM) }
+    val currentDayFromVm by viewModel.currentDate.collectAsState()
+    var customDateStr by remember(currentDayFromVm) { mutableStateOf(currentDayFromVm) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("manual_local_storage_form_card"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Manual Form",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Food Form Logger (localStorage synced)",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                
+                if (manualLogs.isNotEmpty()) {
+                    TextButton(
+                        onClick = { showStoredLogs = !showStoredLogs },
+                        modifier = Modifier.testTag("toggle_stored_logs_button")
+                    ) {
+                        Text(
+                            text = if (showStoredLogs) "Hide Saved (${manualLogs.size})" else "Show Saved (${manualLogs.size})",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Food Name Field
+            OutlinedTextField(
+                value = foodName,
+                onValueChange = { foodName = it },
+                label = { Text("Food Item Name") },
+                placeholder = { Text("e.g. Avocado, Whole Wheat Toast") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("form_food_name_input"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Expandable Online Lookup Section
+            val onlineResults by viewModel.onlineSearchResults.collectAsState()
+            val isSearchingOnline by viewModel.isOnlineSearching.collectAsState()
+            
+            var showOnlineSearch by remember { mutableStateOf(false) }
+            var onlineSearchQuery by remember { mutableStateOf("") }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.04f))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showOnlineSearch = !showOnlineSearch },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search Online Database",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Search Online Food Database",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Icon(
+                        imageVector = if (showOnlineSearch) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Toggle Search Content",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                if (showOnlineSearch) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = onlineSearchQuery,
+                            onValueChange = { onlineSearchQuery = it },
+                            placeholder = { Text("Search USDA / Nutritionix...", fontSize = 12.sp) },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .testTag("online_food_search_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                            )
+                        )
+
+                        Button(
+                            onClick = { viewModel.performOnlineFoodSearch(onlineSearchQuery) },
+                            modifier = Modifier
+                                .height(38.dp)
+                                .testTag("online_food_search_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp)
+                        ) {
+                            if (isSearchingOnline) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                            } else {
+                                Text("Search", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                            }
+                        }
+                    }
+
+                    if (onlineResults.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Search Results (Click to load, or 'Log Direct'):",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            onlineResults.forEach { result ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            foodName = result.name
+                                            servingSizeText = result.servingSize.toString()
+                                            viewModel.setOnlineSearchQuery(result.name)
+                                        }
+                                        .testTag("online_search_result_item_${result.id}"),
+                                    shape = RoundedCornerShape(6.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surface
+                                    ),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = result.name,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            
+                                            val sourceBg = if (result.source == "USDA") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.tertiaryContainer
+                                            val sourceColor = if (result.source == "USDA") MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onTertiaryContainer
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(sourceBg)
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = result.source,
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                                    color = sourceColor
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Serving: ${result.servingSize} ${result.servingSizeUnit}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            
+                                            val cals = result.nutrients["calories"] ?: 0.0
+                                            val prot = result.nutrients["protein"] ?: 0.0
+                                            val carb = result.nutrients["carbohydrates"] ?: 0.0
+                                            val fat = result.nutrients["fat"] ?: 0.0
+                                            Text(
+                                                text = "%.0f kcal | P: %.1fg C: %.1fg F: %.1fg".format(cals, prot, carb, fat),
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Button(
+                                            onClick = {
+                                                viewModel.logOnlineFoodItem(
+                                                    foodName = result.name,
+                                                    mealType = selectedMeal,
+                                                    quantity = servingSizeText.toDoubleOrNull() ?: result.servingSize,
+                                                    unit = result.servingSizeUnit,
+                                                    nutrients = result.nutrients,
+                                                    source = result.source
+                                                )
+                                                foodName = ""
+                                                servingSizeText = "1.0"
+                                            },
+                                            modifier = Modifier
+                                                .align(Alignment.End)
+                                                .height(28.dp)
+                                                .testTag("log_online_item_${result.id}"),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary
+                                            ),
+                                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Icon(Icons.Default.Add, contentDescription = "Log Directly", modifier = Modifier.size(12.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Log Direct", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (!isSearchingOnline && onlineSearchQuery.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "No results found. Double check search query or API setup.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Serving Size + Stepper Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = servingSizeText,
+                    onValueChange = { newValue ->
+                        if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                            servingSizeText = newValue
+                        }
+                    },
+                    label = { Text("Serving Size / Quantity") },
+                    placeholder = { Text("1.0") },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal
+                    ),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("form_serving_size_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+
+                // Increment / Decrement Steppers
+                Row(
+                    modifier = Modifier.padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            val currentVal = servingSizeText.toDoubleOrNull() ?: 1.0
+                            if (currentVal > 0.1) {
+                                servingSizeText = "%.1f".format(currentVal - 0.1)
+                            }
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(MaterialTheme.colorScheme.surface, CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), CircleShape)
+                            .testTag("form_decrease_serving")
+                    ) {
+                        Text("-", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    }
+
+                    IconButton(
+                        onClick = {
+                            val currentVal = servingSizeText.toDoubleOrNull() ?: 1.0
+                            servingSizeText = "%.1f".format(currentVal + 0.1)
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(MaterialTheme.colorScheme.surface, CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), CircleShape)
+                            .testTag("form_increase_serving")
+                    ) {
+                        Text("+", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Meal Selector Label
+            Text(
+                text = "Meal Category",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+
+            // Meal Selection Chips
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                mealTypes.forEach { type ->
+                    val isSelected = selectedMeal == type
+                    val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+
+                    Surface(
+                        onClick = { selectedMeal = type },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .testTag("form_meal_chip_$type"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = containerColor,
+                        contentColor = contentColor,
+                        border = if (isSelected) BorderStroke(1.dp, borderColor) else null
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Text(
+                                text = type,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Timestamp Configuration Panel
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                    .padding(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DateRange,
+                            contentDescription = "Timestamp Settings",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Log Intake Timestamp",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Toggle Button for Custom Timestamp
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = if (useCustomTimestamp) "Custom" else "Current Time",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (useCustomTimestamp) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Switch(
+                            checked = useCustomTimestamp,
+                            onCheckedChange = { useCustomTimestamp = it },
+                            modifier = Modifier.testTag("form_custom_timestamp_switch")
+                        )
+                    }
+                }
+
+                if (useCustomTimestamp) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // Date & Time pickers
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Date input
+                        OutlinedTextField(
+                            value = customDateStr,
+                            onValueChange = { newValue ->
+                                if (newValue.length <= 10) {
+                                    customDateStr = newValue
+                                }
+                            },
+                            label = { Text("Date (YYYY-MM-DD)", style = MaterialTheme.typography.labelSmall) },
+                            placeholder = { Text("e.g. 2026-06-10") },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("form_custom_date_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                            )
+                        )
+
+                        // Time components: Hours, Minutes, AM/PM
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Hour
+                            OutlinedTextField(
+                                value = customHour,
+                                onValueChange = { newValue ->
+                                    val filtered = newValue.take(2).filter { it.isDigit() }
+                                    val intVal = filtered.toIntOrNull()
+                                    if (filtered.isEmpty() || (intVal != null && intVal in 1..12)) {
+                                        customHour = filtered
+                                    }
+                                },
+                                label = { Text("Hour (1-12)", style = MaterialTheme.typography.labelSmall) },
+                                placeholder = { Text("12") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("form_custom_hour_input"),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                )
+                            )
+
+                            // Minute
+                            OutlinedTextField(
+                                value = customMinute,
+                                onValueChange = { newValue ->
+                                    val filtered = newValue.take(2).filter { it.isDigit() }
+                                    val intVal = filtered.toIntOrNull()
+                                    if (filtered.isEmpty() || (intVal != null && intVal in 0..59)) {
+                                        customMinute = filtered
+                                    }
+                                },
+                                label = { Text("Minute (0-59)", style = MaterialTheme.typography.labelSmall) },
+                                placeholder = { Text("00") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("form_custom_minute_input"),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                )
+                            )
+
+                            // AM / PM Selector Row
+                            Row(
+                                modifier = Modifier
+                                    .weight(1.2f)
+                                    .padding(top = 8.dp)
+                                    .height(40.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                listOf(true, false).forEach { isAm ->
+                                    val isSelected = customIsAm == isAm
+                                    val label = if (isAm) "AM" else "PM"
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                                            .clickable { customIsAm = isAm }
+                                            .testTag("form_custom_ampm_${label.lowercase()}"),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Logs will be recorded with the current day and standard real-time timestamp.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp, top = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Action Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = {
+                        foodName = ""
+                        servingSizeText = "1.0"
+                        useCustomTimestamp = false
+                    },
+                    modifier = Modifier.testTag("form_clear_button")
+                ) {
+                    Text("Clear")
+                }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Button(
+                    onClick = {
+                        val servingSize = servingSizeText.toDoubleOrNull() ?: 1.0
+                        val finalTimestamp = if (useCustomTimestamp) {
+                            try {
+                                val sdf = SimpleDateFormat("yyyy-MM-dd h:mm a", Locale.US)
+                                val amPmStr = if (customIsAm) "AM" else "PM"
+                                val hourVal = customHour.toIntOrNull() ?: 12
+                                val minuteVal = customMinute.toIntOrNull() ?: 0
+                                val dateString = if (customDateStr.isNotBlank()) customDateStr else currentDayFromVm
+                                val parsedDate = sdf.parse("$dateString $hourVal:$minuteVal $amPmStr")
+                                parsedDate?.time ?: System.currentTimeMillis()
+                            } catch (e: Exception) {
+                                System.currentTimeMillis()
+                            }
+                        } else {
+                            System.currentTimeMillis()
+                        }
+                        viewModel.addManualFoodLog(foodName, servingSize, selectedMeal, finalTimestamp)
+                        foodName = ""
+                        servingSizeText = "1.0"
+                    },
+                    enabled = foodName.isNotBlank(),
+                    modifier = Modifier.testTag("form_submit_button"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Submit",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Save to localStorage", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                }
+            }
+
+            // Expandable LocalStorage History Logs List
+            if (showStoredLogs && manualLogs.isNotEmpty()) {
+                var showExportDialog by remember { mutableStateOf(false) }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "LocalStorage Store",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "localStorage Persisted Logs (${manualLogs.size})",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+
+                    TextButton(
+                        onClick = { showExportDialog = true },
+                        modifier = Modifier
+                            .height(30.dp)
+                            .testTag("form_export_button"),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Export Format Option",
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Export Backup", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold))
+                    }
+                }
+
+                if (showExportDialog) {
+                    ExportManualLogsDialog(
+                        viewModel = viewModel,
+                        onDismiss = { showExportDialog = false }
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    manualLogs.forEach { log ->
+                        val displayTime = SimpleDateFormat("h:mm a, MMM d", Locale.US).format(java.util.Date(log.timestamp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = log.foodName,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = log.mealType,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Servings: ${log.servingSize} • Stored: $displayTime",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = { editingLog = log },
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .testTag("edit_localStorage_log_${log.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit localStorage log",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { logToDelete = log },
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .testTag("delete_localStorage_log_${log.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete from localStorage",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    editingLog?.let { log ->
+        EditManualFoodLogDialog(
+            log = log,
+            onDismiss = { editingLog = null },
+            onSave = { name, size, meal ->
+                viewModel.updateManualFoodLog(log.id, name, size, meal)
+                editingLog = null
+            }
+        )
+    }
+
+    logToDelete?.let { log ->
+        AlertDialog(
+            onDismissRequest = { logToDelete = null },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Warning",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        text = "Delete localStorage Log?",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            },
+            text = {
+                Text("Are you sure you want to delete \"${log.foodName}\" from your offline localStorage list? This action cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteManualFoodLog(log.id)
+                        logToDelete = null
+                    },
+                    modifier = Modifier.testTag("confirm_delete_localStorage_dialog_button"),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { logToDelete = null },
+                    modifier = Modifier.testTag("cancel_delete_localStorage_dialog_button")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun NutritionixFoodFinderForm(viewModel: NutritionViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    
+    // API Credentials from VM
+    val ixAppId by viewModel.nutritionixAppId.collectAsState()
+    val ixApiKey by viewModel.nutritionixApiKey.collectAsState()
+    
+    // On-the-fly interactive inputs in case they aren't configured
+    var onTheFlyAppId by remember(ixAppId) { mutableStateOf(ixAppId) }
+    var onTheFlyApiKey by remember(ixApiKey) { mutableStateOf(ixApiKey) }
+    
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchResults by remember { mutableStateOf<List<com.example.data.OnlineFoodResult>>(emptyList()) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    
+    // Logging parameters
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
+    var selectedMeal by remember { mutableStateOf("Lunch") }
+    var selectedServingSize by remember { mutableStateOf("1.0") }
+    
+    var showCredentialsForm by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("nutritionix_food_finder_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.08f)
+        ),
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.3f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Title Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Nutritionix API Search",
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Column {
+                        Text(
+                            text = "Nutritionix Food Finder",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                        Text(
+                            text = "Log branded foods with instant macro profiles",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                
+                IconButton(
+                    onClick = { showCredentialsForm = !showCredentialsForm },
+                    modifier = Modifier.testTag("nutritionix_toggle_keys_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Configure API Keys",
+                        tint = if (ixAppId.isBlank() || ixApiKey.isBlank()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+            
+            // On-the-fly credential fields or config instructions
+            if (showCredentialsForm || ixAppId.isBlank() || ixApiKey.isBlank()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "🔑 Nutritionix API Credentials Required",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Enter credentials below to enable cloud food database scanning. Sign up at developer.nutritionix.com to obtain permanent free keys.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        
+                        OutlinedTextField(
+                            value = onTheFlyAppId,
+                            onValueChange = { onTheFlyAppId = it },
+                            label = { Text("Nutritionix App ID", fontSize = 11.sp) },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().testTag("nutritionix_on_the_fly_appid"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                            )
+                        )
+                        
+                        OutlinedTextField(
+                            value = onTheFlyApiKey,
+                            onValueChange = { onTheFlyApiKey = it },
+                            label = { Text("Nutritionix API Key", fontSize = 11.sp) },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().testTag("nutritionix_on_the_fly_apikey"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                            )
+                        )
+                        
+                        Button(
+                            onClick = {
+                                viewModel.saveApiCredentials(
+                                    usdaKey = viewModel.usdaApiKey.value,
+                                    ixAppId = onTheFlyAppId,
+                                    ixApiKey = onTheFlyApiKey
+                                )
+                                showCredentialsForm = false
+                                Toast.makeText(context, "Nutritionix local keys updated!", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.align(Alignment.End).testTag("save_nutritionix_on_the_fly_btn"),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Save Credentials", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                        }
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            // Search Input Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search branded products e.g. Chobani Yogurt...") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f).testTag("nutritionix_search_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.tertiary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+                
+                Button(
+                    onClick = {
+                        val trimmed = searchQuery.trim()
+                        if (trimmed.isNotBlank()) {
+                            coroutineScope.launch {
+                                isSearching = true
+                                errorMessage = null
+                                try {
+                                    val results = com.example.data.NutritionApiIntegration.searchNutritionix(
+                                        query = trimmed,
+                                        customAppId = ixAppId.takeIf { it.isNotBlank() },
+                                        customApiKey = ixApiKey.takeIf { it.isNotBlank() }
+                                    )
+                                    searchResults = results
+                                    if (results.isEmpty()) {
+                                        errorMessage = "No items found. Please verify your query or configured API keys."
+                                    }
+                                } catch (e: Exception) {
+                                    errorMessage = "Search failed: ${e.localizedMessage}"
+                                    searchResults = emptyList()
+                                } finally {
+                                    isSearching = false
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("nutritionix_search_button"),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiary
+                    )
+                ) {
+                    if (isSearching) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onTertiary
+                        )
+                    } else {
+                        Text("Search", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                    }
+                }
+            }
+            
+            // Shared Servings & Target Meal Selection (applied upon logging)
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+            Spacer(modifier = Modifier.height(10.dp))
+            
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Serving Size Selector
+                OutlinedTextField(
+                    value = selectedServingSize,
+                    onValueChange = { newValue ->
+                        if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                            selectedServingSize = newValue
+                        }
+                    },
+                    label = { Text("Log Quantity", fontSize = 11.sp) },
+                    placeholder = { Text("1.0") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).testTag("nutritionix_qty_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                    )
+                )
+                
+                // Stepper for Quantity Selection
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            val currentVal = selectedServingSize.toDoubleOrNull() ?: 1.0
+                            if (currentVal > 0.1) {
+                                selectedServingSize = "%.1f".format(currentVal - 0.1)
+                            }
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(MaterialTheme.colorScheme.surface, CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), CircleShape)
+                            .testTag("nutritionix_decrease_qty")
+                    ) {
+                        Text("-", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    }
+
+                    IconButton(
+                        onClick = {
+                            val currentVal = selectedServingSize.toDoubleOrNull() ?: 1.0
+                            selectedServingSize = "%.1f".format(currentVal + 0.1)
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(MaterialTheme.colorScheme.surface, CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), CircleShape)
+                            .testTag("nutritionix_increase_qty")
+                    ) {
+                        Text("+", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(10.dp))
+            
+            // Meal Category Buttons
+            Text(
+                text = "Target Meal Category",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                mealTypes.forEach { type ->
+                    val isSelected = selectedMeal == type
+                    val containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    val contentColor = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    val borderColor = if (isSelected) MaterialTheme.colorScheme.secondary else Color.Transparent
+
+                    Surface(
+                        onClick = { selectedMeal = type },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(32.dp)
+                            .testTag("nutritionix_meal_chip_$type"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = containerColor,
+                        contentColor = contentColor,
+                        border = if (isSelected) BorderStroke(1.dp, borderColor) else null
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Text(
+                                text = type,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.5.sp)
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Search Results Section
+            if (searchResults.isNotEmpty() || errorMessage != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                Spacer(modifier = Modifier.height(10.dp))
+                
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage ?: "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                } else {
+                    Text(
+                        text = "Nutritionix Branded Matches:",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 240.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        searchResults.forEach { result ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("nutritionix_result_item_${result.id}"),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surface
+                                ),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = result.name,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            if (!result.brandName.isNullOrBlank()) {
+                                                Text(
+                                                    text = "Brand: ${result.brandName}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                                    color = MaterialTheme.colorScheme.secondary
+                                                )
+                                            }
+                                        }
+                                        
+                                        // "Add food to journal" button
+                                        Button(
+                                            onClick = {
+                                                val portion = selectedServingSize.toDoubleOrNull() ?: 1.0
+                                                viewModel.logOnlineFoodItem(
+                                                    foodName = result.name,
+                                                    mealType = selectedMeal,
+                                                    quantity = portion * result.servingSize,
+                                                    unit = result.servingSizeUnit,
+                                                    nutrients = result.nutrients,
+                                                    source = "Nutritionix"
+                                                )
+                                                Toast.makeText(context, "Added ${result.name} to $selectedMeal!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier
+                                                .height(30.dp)
+                                                .testTag("nutritionix_add_btn_${result.id}"),
+                                            shape = RoundedCornerShape(6.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.tertiary
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                        ) {
+                                            Icon(Icons.Default.Add, contentDescription = "Add", modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Log", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                        }
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    
+                                    // Serving description
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Portion: ${result.servingSize} ${result.servingSizeUnit}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        
+                                        // Macronutrient pill values
+                                        val cals = result.nutrients["calories"] ?: 0.0
+                                        val prot = result.nutrients["protein"] ?: 0.0
+                                        val carb = result.nutrients["carbohydrates"] ?: 0.0
+                                        val fat = result.nutrients["fat"] ?: 0.0
+                                        Text(
+                                            text = "%.0f kcal | P: %.1fg C: %.1fg F: %.1fg".format(cals, prot, carb, fat),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class LocalStateLogItem(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String,
+    val portionSize: Double,
+    val mealType: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+fun loadStagedDailyLogs(context: android.content.Context): List<LocalStateLogItem> {
+    val sharedPrefs = context.getSharedPreferences("local_storage", android.content.Context.MODE_PRIVATE)
+    val jsonString = sharedPrefs.getString("staged_daily_logs", null)
+    if (jsonString.isNullOrBlank()) return emptyList()
+    val list = mutableListOf<LocalStateLogItem>()
+    try {
+        val array = org.json.JSONArray(jsonString)
+        for (i in 0 until array.length()) {
+            val obj = array.getJSONObject(i)
+            list.add(
+                LocalStateLogItem(
+                    id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                    name = obj.optString("name", ""),
+                    portionSize = obj.optDouble("portionSize", 1.0),
+                    mealType = obj.optString("mealType", "Lunch"),
+                    timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                )
+            )
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("LocalStateDailyLogForm", "Error loading staged logs", e)
+    }
+    return list
+}
+
+fun saveStagedDailyLogs(context: android.content.Context, list: List<LocalStateLogItem>) {
+    val sharedPrefs = context.getSharedPreferences("local_storage", android.content.Context.MODE_PRIVATE)
+    val array = org.json.JSONArray()
+    for (item in list) {
+        val obj = org.json.JSONObject().apply {
+            put("id", item.id)
+            put("name", item.name)
+            put("portionSize", item.portionSize)
+            put("mealType", item.mealType)
+            put("timestamp", item.timestamp)
+        }
+        array.put(obj)
+    }
+    sharedPrefs.edit().putString("staged_daily_logs", array.toString()).apply()
+}
+
+@Composable
+fun LocalStateDailyLogForm(viewModel: NutritionViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val customFoods by viewModel.localCustomFoods.collectAsState()
+    
+    var foodNameInput by remember { mutableStateOf("") }
+    var portionSizeInput by remember { mutableStateOf("1.0") }
+    var unitInput by remember { mutableStateOf("serving") }
+    
+    // Track what is currently being edited
+    var editingItem by remember { mutableStateOf<CustomStateFoodItem?>(null) }
+    
+    val popularUnits = listOf("g", "oz", "scoop", "cup", "piece", "serving", "slice")
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("local_state_daily_log_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        ),
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.3f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.List,
+                    contentDescription = "Custom Food Library",
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Custom Foods Library (Local State Array)",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    Text(
+                        text = "Design custom food templates with portion and unit parameters as the foundation for rapid nutrient logging",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Food Name Row Input
+            OutlinedTextField(
+                value = foodNameInput,
+                onValueChange = { foodNameInput = it },
+                label = { Text("Food Item Name", style = MaterialTheme.typography.labelMedium) },
+                placeholder = { Text("e.g. Grass-fed Ribeye, Organic Berries") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("local_food_name_input"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.secondary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Portion Input + Stepper Increments Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = portionSizeInput,
+                    onValueChange = { newValue ->
+                        if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                            portionSizeInput = newValue
+                        }
+                    },
+                    label = { Text("Portion Size") },
+                    placeholder = { Text("1.0") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("local_portion_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.secondary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+
+                Row(
+                    modifier = Modifier.padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            val currentVal = portionSizeInput.toDoubleOrNull() ?: 1.0
+                            if (currentVal > 0.1) {
+                                portionSizeInput = if (currentVal >= 1.0 && currentVal % 1.0 == 0.0) {
+                                    (currentVal - 1.0).toInt().toString()
+                                } else {
+                                    "%.1f".format(currentVal - 0.1)
+                                }
+                                if (portionSizeInput == "0") portionSizeInput = "0.1"
+                            }
+                        },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(MaterialTheme.colorScheme.surface, CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), CircleShape)
+                            .testTag("local_portion_decrement")
+                    ) {
+                        Text("-", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+                    }
+
+                    IconButton(
+                        onClick = {
+                            val currentVal = portionSizeInput.toDoubleOrNull() ?: 1.0
+                            portionSizeInput = if (currentVal % 1.0 == 0.0) {
+                                (currentVal + 1.0).toInt().toString()
+                            } else {
+                                "%.1f".format(currentVal + 0.1)
+                            }
+                        },
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(MaterialTheme.colorScheme.surface, CircleShape)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), CircleShape)
+                            .testTag("local_portion_increment")
+                    ) {
+                        Text("+", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Unit Input Field
+            OutlinedTextField(
+                value = unitInput,
+                onValueChange = { unitInput = it },
+                label = { Text("Unit of Measurement", style = MaterialTheme.typography.labelMedium) },
+                placeholder = { Text("e.g. grams, oz, scoop, cup, serving") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("local_unit_input"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.secondary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Quick Unit selection caps
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Quick:",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.secondary
+                )
+                popularUnits.forEach { unit ->
+                    val isSelected = unitInput.trim().equals(unit, ignoreCase = true)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+                                else MaterialTheme.colorScheme.surface
+                            )
+                            .border(
+                                1.dp,
+                                if (isSelected) MaterialTheme.colorScheme.secondary
+                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { unitInput = unit }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .testTag("local_quick_unit_$unit"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = unit,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Actions for adding or updating templates
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = {
+                        foodNameInput = ""
+                        portionSizeInput = "1.0"
+                        unitInput = "serving"
+                        editingItem = null
+                    },
+                    modifier = Modifier.testTag("local_clear_fields_button")
+                ) {
+                    Text(if (editingItem != null) "Cancel" else "Clear Fields")
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Button(
+                    onClick = {
+                        val portion = portionSizeInput.toDoubleOrNull() ?: 1.0
+                        val nameStr = foodNameInput.trim()
+                        val unitStr = unitInput.trim()
+                        
+                        val activeItem = editingItem
+                        if (activeItem != null) {
+                            // Update existing template
+                            viewModel.updateCustomFoodItem(
+                                id = activeItem.id,
+                                name = nameStr,
+                                portionSize = portion,
+                                unit = unitStr
+                            )
+                            Toast.makeText(context, "Resaved custom food template: '$nameStr'", Toast.LENGTH_SHORT).show()
+                            editingItem = null
+                        } else {
+                            // Add new template
+                            viewModel.addCustomFoodItem(
+                                name = nameStr,
+                                portionSize = portion,
+                                unit = unitStr
+                            )
+                            Toast.makeText(context, "Saved template: '$nameStr' to state array", Toast.LENGTH_SHORT).show()
+                        }
+                        foodNameInput = ""
+                        portionSizeInput = "1.0"
+                        unitInput = "serving"
+                    },
+                    enabled = foodNameInput.isNotBlank() && unitInput.isNotBlank(),
+                    modifier = Modifier.testTag("local_add_to_state_button"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary,
+                        contentColor = MaterialTheme.colorScheme.onSecondary
+                    )
+                ) {
+                    Icon(
+                        imageVector = if (editingItem != null) Icons.Default.Check else Icons.Default.Add,
+                        contentDescription = "Save template",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (editingItem != null) "Save Changes" else "Save Template",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Saved Custom Templates List
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "My Custom Foods Library (${customFoods.size})",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (customFoods.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                        .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.08f)), RoundedCornerShape(12.dp))
+                        .padding(20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Empty Custom Foods",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Text(
+                            text = "No custom items defined in local state.",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                        Text(
+                            text = "Input food items above to construct your reusable templates foundation.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.testTag("local_state_daily_log_list")
+                ) {
+                    customFoods.forEach { food ->
+                        var isLogExpanded by remember { mutableStateOf(false) }
+                        
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = food.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Base Portion: ${food.portionSize} ${food.unit}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            foodNameInput = food.name
+                                            portionSizeInput = food.portionSize.toString()
+                                            unitInput = food.unit
+                                            editingItem = food
+                                        },
+                                        modifier = Modifier.size(36.dp).testTag("local_edit_item_${food.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Edit Custom Food Template",
+                                            tint = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.deleteCustomFoodItem(food.id)
+                                            Toast.makeText(context, "Deleted template '${food.name}'", Toast.LENGTH_SHORT).show()
+                                            if (editingItem?.id == food.id) {
+                                                editingItem = null
+                                                foodNameInput = ""
+                                                portionSizeInput = "1.0"
+                                                unitInput = "serving"
+                                            }
+                                        },
+                                        modifier = Modifier.size(36.dp).testTag("local_delete_item_${food.id}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete from local state array",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Quick Log section
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(
+                                    onClick = { isLogExpanded = !isLogExpanded },
+                                    modifier = Modifier.height(30.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isLogExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "⚡ Quick Log Intake",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                }
+                            }
+
+                            if (isLogExpanded) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    mealTypes.forEach { type ->
+                                        Surface(
+                                            onClick = {
+                                                // Log the customized food to daily tracking
+                                                viewModel.addManualFoodLog(
+                                                    foodName = "${food.name} (${food.portionSize} ${food.unit})",
+                                                    servingSize = 1.0,
+                                                    mealType = type
+                                                )
+                                                Toast.makeText(
+                                                    context,
+                                                    "Spent intake: Logged ${food.name} to $type journal!",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                isLogExpanded = false
+                                            },
+                                            modifier = Modifier
+                                                .height(28.dp)
+                                                .testTag("local_quick_log_${food.id}_$type"),
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f))
+                                        ) {
+                                            Box(
+                                                contentAlignment = Alignment.Center,
+                                                modifier = Modifier.padding(horizontal = 8.dp).fillMaxHeight()
+                                            ) {
+                                                Text(
+                                                    text = type,
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 9.sp
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ExportManualLogsDialog(
+    viewModel: NutritionViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    
+    val jsonString = remember { viewModel.getManualFoodLogsAsJson() }
+    val csvString = remember { viewModel.getManualFoodLogsAsCsv() }
+
+    fun copyToClipboard(text: String, label: String) {
+        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(text))
+        viewModel.setOperationMessage("$label copied to clipboard!")
+    }
+
+    fun shareText(text: String, title: String) {
+        val sendIntent = android.content.Intent().apply {
+            action = android.content.Intent.ACTION_SEND
+            putExtra(android.content.Intent.EXTRA_TEXT, text)
+            type = "text/plain"
+        }
+        val shareIntent = android.content.Intent.createChooser(sendIntent, title)
+        context.startActivity(shareIntent)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Share,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Export Saved Logs",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "Export your locally stored food logs for backup or use in external spreadsheet tools (such as Google Sheets or Excel).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+
+                // JSON EXPORT SECTION
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "JSON Format (Developer Backup / Restore)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { 
+                                copyToClipboard(jsonString, "JSON Backup")
+                                onDismiss()
+                            },
+                            modifier = Modifier.weight(1f).testTag("export_json_copy_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        ) {
+                            Text("Copy JSON", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Button(
+                            onClick = { 
+                                shareText(jsonString, "Share JSON Backup")
+                                onDismiss()
+                            },
+                            modifier = Modifier.weight(1f).testTag("export_json_share_button")
+                        ) {
+                            Text("Share JSON", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // CSV EXPORT SECTION
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "CSV Format (Spreadsheets / Excel)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { 
+                                copyToClipboard(csvString, "CSV Log Data")
+                                onDismiss()
+                            },
+                            modifier = Modifier.weight(1f).testTag("export_csv_copy_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        ) {
+                            Text("Copy CSV", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Button(
+                            onClick = { 
+                                shareText(csvString, "Share CSV Log Data")
+                                onDismiss()
+                            },
+                            modifier = Modifier.weight(1f).testTag("export_csv_share_button")
+                        ) {
+                            Text("Share CSV", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+fun EditManualFoodLogDialog(
+    log: ManualFoodLog,
+    onDismiss: () -> Unit,
+    onSave: (String, Double, String) -> Unit
+) {
+    var foodName by remember { mutableStateOf(log.foodName) }
+    var servingSizeText by remember { mutableStateOf(log.servingSize.toString()) }
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
+    var selectedMeal by remember { mutableStateOf(log.mealType) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Edit localStorage Log",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = foodName,
+                    onValueChange = { foodName = it },
+                    label = { Text("Food Item Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = servingSizeText,
+                        onValueChange = { newValue ->
+                            if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                                servingSizeText = newValue
+                            }
+                        },
+                        label = { Text("Serving Size") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val currentVal = servingSizeText.toDoubleOrNull() ?: 1.0
+                                if (currentVal > 0.1) {
+                                    servingSizeText = "%.1f".format(currentVal - 0.1)
+                                }
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(MaterialTheme.colorScheme.surface, CircleShape)
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), CircleShape)
+                        ) {
+                            Text("-", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        }
+
+                        IconButton(
+                            onClick = {
+                                val currentVal = servingSizeText.toDoubleOrNull() ?: 1.0
+                                servingSizeText = "%.1f".format(currentVal + 0.1)
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(MaterialTheme.colorScheme.surface, CircleShape)
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), CircleShape)
+                        ) {
+                            Text("+", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Meal Category",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    mealTypes.forEach { type ->
+                        val isSelected = selectedMeal == type
+                        val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                        
+                        Surface(
+                            onClick = { selectedMeal = type },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(32.dp),
+                            shape = RoundedCornerShape(6.dp),
+                            color = containerColor,
+                            contentColor = contentColor,
+                            border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                Text(
+                                    text = type,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val size = servingSizeText.toDoubleOrNull() ?: 1.0
+                    onSave(foodName, size, selectedMeal)
+                },
+                enabled = foodName.isNotBlank()
+            ) {
+                Text("Save Changes")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun JournalTab(viewModel: NutritionViewModel, onNavigateToTab: (Int) -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val entries by viewModel.currentDateEntries.collectAsState()
     val currentDate by viewModel.currentDate.collectAsState()
     val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
     var editingEntry by remember { mutableStateOf<FoodLogEntry?>(null) }
+    var entryToDelete by remember { mutableStateOf<FoodLogEntry?>(null) }
+    var selectedLogForBreakdown by remember { mutableStateOf<FoodLogEntry?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredEntries = remember(entries, searchQuery) {
+        if (searchQuery.isBlank()) {
+            entries
+        } else {
+            entries.filter { it.foodName.contains(searchQuery, ignoreCase = true) }
+        }
+    }
     var showCopyDialog by remember { mutableStateOf(false) }
+    var showPasteDialog by remember { mutableStateOf(false) }
+    var clipboardText by remember { mutableStateOf("") }
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+    var showSavePresetDialog by remember { mutableStateOf(false) }
+
+    // SAF CreateDocument Launcher for Export
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            val jsonToWrite = pendingExportJson
+            if (jsonToWrite != null) {
+                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            outputStream.write(jsonToWrite.toByteArray(Charsets.UTF_8))
+                        }
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            Toast.makeText(context, "Daily food log downloaded successfully!", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            Toast.makeText(context, "Download failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                        }
+                    } finally {
+                        pendingExportJson = null
+                    }
+                }
+            } else {
+                viewModel.exportLogs { jsonString ->
+                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                                outputStream.write(jsonString.toByteArray(Charsets.UTF_8))
+                            }
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                Toast.makeText(context, "Full log backup saved successfully!", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                Toast.makeText(context, "Save failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // SAF OpenDocument Launcher for Import
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        val jsonString = inputStream.bufferedReader().use { it.readText() }
+                        viewModel.importLogs(jsonString) { _, _ -> }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
 
     val datesRangeList = remember {
         val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -1407,6 +7990,70 @@ fun JournalTab(viewModel: NutritionViewModel) {
         )
     }
 
+    if (showPasteDialog) {
+        AlertDialog(
+            onDismissRequest = { showPasteDialog = false },
+            title = { Text("Paste Journal Backup Code") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Paste your previously exported JSON database logs here to restore your journal history.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = clipboardText,
+                        onValueChange = { clipboardText = it },
+                        label = { Text("JSON Code String") },
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .testTag("dialog_paste_logs_input"),
+                        maxLines = 8,
+                        placeholder = { Text("[ { \"date\": \"2026-05-26\", ... } ]") }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (clipboardText.isNotBlank()) {
+                            viewModel.importLogs(clipboardText) { success, message ->
+                                if (success) {
+                                    clipboardText = ""
+                                    showPasteDialog = false
+                                    Toast.makeText(context, "Journal logs imported successfully!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Import failed: $message", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("dialog_paste_submit_button")
+                ) {
+                    Text("Restore Database Logs")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPasteDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showSavePresetDialog) {
+        SavePresetDialog(
+            entries = entries,
+            onDismiss = { showSavePresetDialog = false },
+            onSaveClicked = { name, selectedFoods ->
+                viewModel.saveFavoriteMeal(name, selectedFoods)
+                showSavePresetDialog = false
+            }
+        )
+    }
+
     if (entries.isEmpty()) {
         Column(
             modifier = Modifier
@@ -1416,6 +8063,220 @@ fun JournalTab(viewModel: NutritionViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Header Row at the top of empty state
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Today's Log Journal",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.exportSpecificEntries(entries) { jsonString ->
+                                pendingExportJson = jsonString
+                                try {
+                                    exportLauncher.launch("nutriscribe-daily-log-$currentDate.json")
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.primary
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                        modifier = Modifier.testTag("download_daily_log_json_btn_empty")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Download Daily Log JSON",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Download JSON",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+
+                    // Unified Tools Dropdown Menu Button
+                    Box {
+                        var showToolsMenu by remember { mutableStateOf(false) }
+                        Button(
+                            onClick = { showToolsMenu = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                            modifier = Modifier.testTag("empty_journal_menu_button"),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp, pressedElevation = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Journal Tools",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Journal Tools", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showToolsMenu,
+                            onDismissRequest = { showToolsMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Reports & Trends")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    onNavigateToTab(2)
+                                },
+                                modifier = Modifier.testTag("menu_nav_reports")
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Download Daily Log (.json)")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    viewModel.exportSpecificEntries(entries) { jsonString ->
+                                        pendingExportJson = jsonString
+                                        try {
+                                            exportLauncher.launch("nutriscribe-daily-log-$currentDate.json")
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.testTag("menu_download_daily_log_json_empty")
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Export Backup (.json)")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    coroutineScope.launch {
+                                        try {
+                                            pendingExportJson = viewModel.getExportString()
+                                            exportLauncher.launch("nutriscribe-journal-backup.json")
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.testTag("menu_export_file")
+                            )
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Import Backup (.json)")
+                                }
+                            },
+                            onClick = {
+                                showToolsMenu = false
+                                try {
+                                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.testTag("menu_import_file")
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Copy Backup Code")
+                                }
+                            },
+                            onClick = {
+                                showToolsMenu = false
+                                viewModel.exportLogs { jsonString ->
+                                    try {
+                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        val clip = android.content.ClipData.newPlainText("NutriScribe Log Journal Backup", jsonString)
+                                        clipboard.setPrimaryClip(clip)
+                                        Toast.makeText(context, "Backup code copied closely to clipboard!", Toast.LENGTH_SHORT).show()
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Clipboard error: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.testTag("menu_copy_code")
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Paste Backup Code")
+                                }
+                            },
+                            onClick = {
+                                showToolsMenu = false
+                                showPasteDialog = true
+                            },
+                            modifier = Modifier.testTag("menu_paste_code")
+                        )
+                    }
+                }
+            }
+        }
+
+            CustomNutrientFoodForm(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            NutritionixFoodFinderForm(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            ManualLocalStorageForm(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            LocalStateDailyLogForm(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            FavoriteMealsLibrarySection(viewModel = viewModel)
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1462,69 +8323,349 @@ fun JournalTab(viewModel: NutritionViewModel) {
                     }
                 }
             }
-
-            ImportExportSection(viewModel = viewModel)
             Spacer(modifier = Modifier.height(32.dp))
         }
     } else {
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Today's Log Journal",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Today's Log Journal",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f)
-                    )
-                    
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.exportSpecificEntries(entries) { jsonString ->
+                                pendingExportJson = jsonString
+                                try {
+                                    exportLauncher.launch("nutriscribe-daily-log-$currentDate.json")
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.primary
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                        modifier = Modifier.testTag("download_daily_log_json_btn_loaded")
                     ) {
-                        OutlinedButton(
-                            onClick = { showCopyDialog = true },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
-                            modifier = Modifier.testTag("copy_day_log_button")
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Download Daily Log JSON",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Download JSON",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+
+                    Button(
+                        onClick = { showSavePresetDialog = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary,
+                            contentColor = MaterialTheme.colorScheme.onSecondary
+                        ),
+                        modifier = Modifier.testTag("save_favorite_meal_btn_loaded")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Favorite,
+                            contentDescription = "Save Favorite",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Save Favorite",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+
+                    // Unified Tools Dropdown Menu Button
+                    Box {
+                        var showToolsMenu by remember { mutableStateOf(false) }
+                        Button(
+                            onClick = { showToolsMenu = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                            modifier = Modifier.testTag("loaded_journal_menu_button"),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp, pressedElevation = 6.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Share,
-                                contentDescription = "Copy Day Log",
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Journal Tools",
                                 modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Copy Day", style = MaterialTheme.typography.labelMedium)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Journal Tools", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
 
-                        OutlinedButton(
-                            onClick = { viewModel.clearAllForDate(currentDate) },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-                            modifier = Modifier.testTag("clear_all_for_day_button")
+                        DropdownMenu(
+                            expanded = showToolsMenu,
+                            onDismissRequest = { showToolsMenu = false }
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Clear All Entries",
-                                modifier = Modifier.size(16.dp)
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Reports & Trends")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    onNavigateToTab(2)
+                                },
+                                modifier = Modifier.testTag("menu_nav_reports")
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Clear Day", style = MaterialTheme.typography.labelMedium)
+                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Download Daily Log (.json)")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    viewModel.exportSpecificEntries(entries) { jsonString ->
+                                        pendingExportJson = jsonString
+                                        try {
+                                            exportLauncher.launch("nutriscribe-daily-log-$currentDate.json")
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.testTag("menu_download_daily_log_json_loaded")
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Export Backup (.json)")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    coroutineScope.launch {
+                                        try {
+                                            pendingExportJson = viewModel.getExportString()
+                                            exportLauncher.launch("nutriscribe-journal-backup.json")
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.testTag("menu_export_file")
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Import Backup (.json)")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    try {
+                                        importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.testTag("menu_import_file")
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Copy Backup Code")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    viewModel.exportLogs { jsonString ->
+                                        try {
+                                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            val clip = android.content.ClipData.newPlainText("NutriScribe Log Journal Backup", jsonString)
+                                            clipboard.setPrimaryClip(clip)
+                                            Toast.makeText(context, "Backup code copied safely to clipboard!", Toast.LENGTH_SHORT).show()
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Clipboard error: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.testTag("menu_copy_code")
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Paste Backup Code")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    showPasteDialog = true
+                                },
+                                modifier = Modifier.testTag("menu_paste_code")
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Copy from another day")
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    showCopyDialog = true
+                                },
+                                modifier = Modifier.testTag("menu_copy_day")
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Clear today's log", color = MaterialTheme.colorScheme.error)
+                                    }
+                                },
+                                onClick = {
+                                    showToolsMenu = false
+                                    viewModel.clearAllForDate(currentDate)
+                                },
+                                modifier = Modifier.testTag("menu_clear_day")
+                            )
                         }
                     }
                 }
             }
 
-            mealTypes.forEach { mealType ->
-                val mealEntries = entries.filter { it.mealType == mealType }
+            CustomNutrientFoodForm(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            NutritionixFoodFinderForm(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            ManualLocalStorageForm(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            LocalStateDailyLogForm(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            FavoriteMealsLibrarySection(viewModel = viewModel)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Search bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                label = { Text("Search Today's Journal") },
+                placeholder = { Text("Search by food name...") },
+                textStyle = MaterialTheme.typography.bodyMedium,
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("journal_search_input"),
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search"
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { searchQuery = "" },
+                            modifier = Modifier.testTag("clear_journal_search_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }
+                }
+            )
+
+            if (filteredEntries.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "No Results",
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "No matching entries found",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "No food in today's log matches \"$searchQuery\"",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    mealTypes.forEach { mealType ->
+                        val mealEntries = filteredEntries.filter { it.mealType == mealType }
                 if (mealEntries.isNotEmpty()) {
                     item {
                         Column {
@@ -1562,7 +8703,7 @@ fun JournalTab(viewModel: NutritionViewModel) {
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .testTag("food_entry_card_${entry.id}")
-                                            .clickable { expanded = !expanded },
+                                            .clickable { selectedLogForBreakdown = entry },
                                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
                                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
                                     ) {
@@ -1618,7 +8759,7 @@ fun JournalTab(viewModel: NutritionViewModel) {
                                                             .clip(CircleShape)
                                                             .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f))
                                                             .border(1.2.dp, MaterialTheme.colorScheme.error, CircleShape)
-                                                            .clickable { viewModel.deleteLog(entry) }
+                                                            .clickable { entryToDelete = entry }
                                                             .testTag("delete_food_button_${entry.id}"),
                                                         contentAlignment = Alignment.Center
                                                     ) {
@@ -1656,12 +8797,8 @@ fun JournalTab(viewModel: NutritionViewModel) {
                     }
                 }
             }
-
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                ImportExportSection(viewModel = viewModel)
-                Spacer(modifier = Modifier.height(32.dp))
-            }
+        }
+    }
         }
     }
 
@@ -1677,6 +8814,59 @@ fun JournalTab(viewModel: NutritionViewModel) {
                 viewModel.reanalyzeAndReplaceEntry(id, text, meal, date)
                 editingEntry = null
             }
+        )
+    }
+
+    entryToDelete?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { entryToDelete = null },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Warning",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        text = "Delete Food Log Entry",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            },
+            text = {
+                Text("Are you sure you want to delete \"${entry.foodName}\" for ${entry.mealType}? This action will permanently remove this item from your daily journal and reduce your nutrient levels accordingly.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteLog(entry)
+                        entryToDelete = null
+                    },
+                    modifier = Modifier.testTag("confirm_delete_dialog_button"),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { entryToDelete = null },
+                    modifier = Modifier.testTag("cancel_delete_dialog_button")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    selectedLogForBreakdown?.let { entry ->
+        FoodNutrientBreakdownBottomSheet(
+            entry = entry,
+            viewModel = viewModel,
+            onDismiss = { selectedLogForBreakdown = null }
         )
     }
 }
@@ -1950,6 +9140,34 @@ fun PeriodicReportsTab(viewModel: NutritionViewModel) {
     }
 
     var pendingHtmlReportText by remember { mutableStateOf<String?>(null) }
+    var pendingCsvReportText by remember { mutableStateOf<String?>(null) }
+
+    val csvReportLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            val csvToWrite = pendingCsvReportText
+            if (csvToWrite != null) {
+                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            outputStream.write(csvToWrite.toByteArray(Charsets.UTF_8))
+                        }
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            Toast.makeText(context, "Monthly CSV Report exported successfully!", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            Toast.makeText(context, "Failed to write CSV: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                        }
+                    } finally {
+                        pendingCsvReportText = null
+                    }
+                }
+            }
+        }
+    }
 
     val htmlReportLauncher = rememberLauncherForActivityResult(
         contract = SafeCreateDocument("text/html")
@@ -1978,6 +9196,28 @@ fun PeriodicReportsTab(viewModel: NutritionViewModel) {
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                    }
+                }
+            }
+        }
+    }
+
+    val pdfReportLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("application/pdf")
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                        viewModel.generatePdfReport(context, report, outputStream)
+                    }
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        Toast.makeText(context, "PDF Report exported successfully!", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to export PDF: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -2111,6 +9351,31 @@ fun PeriodicReportsTab(viewModel: NutritionViewModel) {
                         Button(
                             onClick = {
                                 try {
+                                    pdfReportLauncher.launch("nutriscribe-report-$selectedLabel.pdf")
+                                } catch (e: ActivityNotFoundException) {
+                                    Toast.makeText(context, "System File Picker not available. PDF export aborted.", Toast.LENGTH_LONG).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.testTag("button_export_pdf_report"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Export PDF Summary Report",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Export PDF Summary Report", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                try {
                                     pendingHtmlReportText = viewModel.generateHtmlReport(report)
                                     htmlReportLauncher.launch("nutriscribe-report-$selectedLabel.html")
                                 } catch (e: ActivityNotFoundException) {
@@ -2120,10 +9385,7 @@ fun PeriodicReportsTab(viewModel: NutritionViewModel) {
                                 }
                             },
                             modifier = Modifier.testTag("button_export_html_report"),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Share,
@@ -2147,7 +9409,7 @@ fun PeriodicReportsTab(viewModel: NutritionViewModel) {
                                 }
                             },
                             modifier = Modifier.testTag("button_copy_html_report"),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Share,
@@ -2156,6 +9418,30 @@ fun PeriodicReportsTab(viewModel: NutritionViewModel) {
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Copy HTML to Clipboard", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                try {
+                                    pendingCsvReportText = viewModel.generateMonthlyCsvReport()
+                                    csvReportLauncher.launch("nutriscribe-30day-history.csv")
+                                } catch (e: ActivityNotFoundException) {
+                                    Toast.makeText(context, "System File Picker not available. CSV export aborted.", Toast.LENGTH_LONG).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Could not open File Picker: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.testTag("button_export_csv_report"),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Download 30-Day CSV History",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Download 30-Day CSV History", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.primary)
                         }
                     }
                     
@@ -2584,7 +9870,7 @@ fun NutrientsListTab(viewModel: NutritionViewModel) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedGroup by remember { mutableStateOf<NutrientGroup?>(null) }
 
-    var selectedNutrientStatus by remember { mutableStateOf<NutrientStatus?>(null) }
+    var selectedNutrientKey by remember { mutableStateOf<String?>(null) }
 
     val filteredList = dailyNutrients.filter { status ->
         val matchQuery = status.definition.name.contains(searchQuery, ignoreCase = true)
@@ -2672,7 +9958,7 @@ fun NutrientsListTab(viewModel: NutritionViewModel) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("nutrient_row_${status.definition.key}")
-                        .clickable { selectedNutrientStatus = status },
+                        .clickable { selectedNutrientKey = status.definition.key },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)),
                     border = BorderStroke(1.dp, colorHex.copy(alpha = 0.2f))
                 ) {
@@ -2738,12 +10024,16 @@ fun NutrientsListTab(viewModel: NutritionViewModel) {
     }
 
     // Detail Bottom Sheet modal on grid click
-    if (selectedNutrientStatus != null) {
-        val currStatus = selectedNutrientStatus!!
+    val activeStatus = remember(selectedNutrientKey, dailyNutrients) {
+        selectedNutrientKey?.let { key ->
+            dailyNutrients.find { it.definition.key == key }
+        }
+    }
+    if (activeStatus != null) {
         NutrientDetailBottomSheet(
-            status = currStatus,
-            onDismiss = { selectedNutrientStatus = null },
-            onSaveTarget = { viewModel.updateCustomRda(currStatus.definition.key, it) }
+            status = activeStatus,
+            onDismiss = { selectedNutrientKey = null },
+            onSaveTarget = { viewModel.updateCustomRda(activeStatus.definition.key, it) }
         )
     }
 }
@@ -2894,7 +10184,17 @@ fun NutrientDetailBottomSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            var targetInputValue by remember(def.rda) { mutableStateOf(def.rda.formatInt()) }
+            var targetInputValue by remember(def.key) { mutableStateOf(def.rda.formatInt()) }
+
+            val parsedValue = remember(targetInputValue) {
+                targetInputValue.replace(",", "")
+                    .replace(Regex("(?i)[a-z\\s/]"), "")
+                    .toDoubleOrNull()
+            }
+
+            val standardRda = remember(def.key) {
+                Nutrients.getByKey(def.key)?.rda ?: def.rda
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2912,22 +10212,37 @@ fun NutrientDetailBottomSheet(
 
                 Button(
                     onClick = {
-                        val parsedVal = targetInputValue.toDoubleOrNull()
+                        val parsedVal = parsedValue
                         if (parsedVal != null && parsedVal >= 0.0) {
                             onSaveTarget(parsedVal)
                             onDismiss()
                         }
                     },
                     modifier = Modifier.testTag("save_custom_target_button"),
-                    enabled = targetInputValue.toDoubleOrNull() != null
+                    enabled = parsedValue != null
                 ) {
-                    Text("Apply")
+                    Text("Save")
+                }
+            }
+
+            if (def.rda != standardRda) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        onSaveTarget(0.0) // Clears the custom override in repository
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth().testTag("reset_custom_target_button"),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
+                ) {
+                    Text("Reset to Standard Baseline (${standardRda.formatInt()} ${def.unit})")
                 }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            Button(
+            OutlinedButton(
                 onClick = onDismiss,
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -2942,7 +10257,8 @@ fun NutrientDetailBottomSheet(
 fun AddFoodDialog(
     onDismiss: () -> Unit,
     onConfirm: (String, String) -> Unit,
-    onConfirmBulk: (String) -> Unit
+    onConfirmBulk: (String) -> Unit,
+    onConfirmBarcode: (String, String, Double) -> Unit
 ) {
     var isMultiDayMode by remember { mutableStateOf(false) }
     var foodDescription by remember { mutableStateOf("") }
@@ -2954,32 +10270,249 @@ fun AddFoodDialog(
     var bulkDescription by remember { mutableStateOf("") }
     var logLengthDays by remember { mutableStateOf(3f) }
 
+    var scannedBarcode by remember { mutableStateOf<String?>(null) }
+    var scannedFoodName by remember { mutableStateOf("") }
+    var scannedFoodDosage by remember { mutableStateOf("") }
+    var servingSizeQuantity by remember { mutableStateOf(1.0) }
+
     Dialog(onDismissRequest = onDismiss) {
         if (showScanner) {
             BarcodeQRScannerScreen(
                 onDismiss = { showScanner = false },
                 onBarcodeScanned = { barcode ->
-                    val localMatch = when (barcode) {
-                        "041500000251", "0415000002511" -> "Greek Yogurt with Chia & Honey"
-                        "885101234567", "8851012345678" -> "Premium Whey Protein"
-                        "190111222333", "1901112223334" -> "Daily Multivitamin Tablet"
-                        "301234567890", "3012345678901" -> "Pure Magnesium Glycinate"
-                        "012000000133", "0120000001335" -> "Organic Rolled Oats with Banana"
-                        "490000004433", "4900000044331" -> "Matcha Green Tea"
-                        else -> barcode
+                    val (localMatch, defaultDosage) = when (barcode) {
+                        "041500000251", "0415000002511" -> Pair("Greek Yogurt with Chia & Honey", "1 container (150g)")
+                        "885101234567", "8851012345678" -> Pair("Premium Whey Protein", "1 scoop (30g)")
+                        "190111222333", "1901112223334" -> Pair("Daily Multivitamin Tablet", "1 tablet")
+                        "301234567890", "3012345678901" -> Pair("Pure Magnesium Glycinate", "2 capsules")
+                        "012000000133", "0120000001335" -> Pair("Organic Rolled Oats with Banana", "1 cup (40g cooked)")
+                        "490000004433", "4900000044331" -> Pair("Matcha Green Tea", "1 serving")
+                        else -> Pair("Scanned Product: $barcode", "1 serving")
                     }
-                    foodDescription = localMatch
-                    if (barcode in listOf("885101234567", "8851012345678", "190111222333", "1901112223334", "301234567890", "3012345678901")) {
-                        selectedMeal = "Supplement"
-                    } else if (barcode == "012000000133" || barcode == "0120000001335") {
-                        selectedMeal = "Breakfast"
+                    val defaultMeal = when (barcode) {
+                        "885101234567", "8851012345678", "190111222333", "1901112223334", "301234567890", "3012345678901" -> "Supplement"
+                        "012000000133", "0120000001335" -> "Breakfast"
+                        else -> "Lunch"
                     }
+                    scannedBarcode = barcode
+                    scannedFoodName = localMatch
+                    scannedFoodDosage = defaultDosage
+                    selectedMeal = defaultMeal
                     showScanner = false
                 }
             )
-        }
+        } else if (scannedBarcode != null) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                tonalElevation = 8.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp)
+                ) {
+                    // Success Badge Header
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.QrCode,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Barcode Verified!",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Code: $scannedBarcode",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
 
-        Surface(
+                    // Product Card
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = scannedFoodName,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Standard Portion: $scannedFoodDosage",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // Meal category choosing
+                    Text(
+                        text = "Meal Category",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        mealTypes.forEach { type ->
+                            val isSelected = selectedMeal == type
+                            val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                            val borderColor = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+
+                            Surface(
+                                onClick = { selectedMeal = type },
+                                modifier = Modifier.weight(1f).height(38.dp).testTag("scan_meal_chip_$type"),
+                                shape = RoundedCornerShape(8.dp),
+                                color = containerColor,
+                                contentColor = contentColor,
+                                border = if (isSelected) BorderStroke(1.dp, borderColor) else null
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    Text(
+                                        text = type,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Serving multiplier interactive controls
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.1f)
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Adjust Servings",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "%.1f".format(servingSizeQuantity),
+                                    style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (servingSizeQuantity == 1.0) "serving" else "servings",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            // Slider
+                            Slider(
+                                value = servingSizeQuantity.toFloat(),
+                                onValueChange = { servingSizeQuantity = Math.round(it * 10.0) / 10.0 },
+                                valueRange = 0.1f..5.0f,
+                                steps = 49,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Fast selection preset chips
+                            Text(
+                                text = "Or pick preset:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                val presets = listOf(0.5, 1.0, 1.5, 2.0, 3.0)
+                                presets.forEach { preset ->
+                                    val isSelectedPreset = Math.abs(servingSizeQuantity - preset) < 0.05
+                                    Surface(
+                                        onClick = { servingSizeQuantity = preset },
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = if (isSelectedPreset) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                        contentColor = if (isSelectedPreset) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "${preset}x",
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Row action buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = { scannedBarcode = null }) {
+                            Text("Cancel Scan")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                onConfirmBarcode(scannedBarcode!!, selectedMeal, servingSizeQuantity)
+                            },
+                            modifier = Modifier.testTag("submit_scanned_serving_button")
+                        ) {
+                            Text("Confirm & Log")
+                        }
+                    }
+                }
+            }
+        } else {
+            Surface(
             shape = RoundedCornerShape(16.dp),
             tonalElevation = 8.dp,
             modifier = Modifier.fillMaxWidth()
@@ -3261,6 +10794,7 @@ fun AddFoodDialog(
         }
     }
 }
+}
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -3275,6 +10809,7 @@ fun EditFoodDialog(
     var selectedMeal by remember { mutableStateOf(entry.mealType) }
     var expandedMealDropdown by remember { mutableStateOf(false) }
     var quantity by remember { mutableStateOf(entry.quantity) }
+    var quantityInputStr by remember { mutableStateOf(String.format(Locale.US, "%.2f", entry.quantity)) }
 
     // Direct nutrients
     var calories by remember { mutableStateOf(entry.nutrients["calories"]?.formatInt() ?: "0") }
@@ -3394,24 +10929,37 @@ fun EditFoodDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Portion Size Controls
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                // Portion Size & Quantity Edit Box
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
                 ) {
                     Text(
                         text = "Portion Size / Quantity",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 6.dp)
                     )
+                    
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         IconButton(
-                            onClick = { if (quantity > 0.25) quantity -= 0.25 },
-                            modifier = Modifier.size(28.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape).testTag("edit_qty_dec")
+                            onClick = {
+                                val curVal = quantityInputStr.toDoubleOrNull() ?: quantity
+                                if (curVal > 0.25) {
+                                    val newVal = curVal - 0.25
+                                    quantity = newVal
+                                    quantityInputStr = String.format(Locale.US, "%.2f", newVal)
+                                }
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape)
+                                .testTag("edit_qty_dec")
                         ) {
                             Text(
                                 "-",
@@ -3420,14 +10968,42 @@ fun EditFoodDialog(
                                 fontWeight = FontWeight.Bold
                             )
                         }
-                        Text(
-                            text = "${String.format(Locale.US, "%.2f", quantity)}x",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            modifier = Modifier.padding(horizontal = 8.dp).testTag("edit_qty_value")
+
+                        OutlinedTextField(
+                            value = quantityInputStr,
+                            onValueChange = { text ->
+                                quantityInputStr = text
+                                val parsed = text.toDoubleOrNull()
+                                if (parsed != null && parsed > 0.0) {
+                                    quantity = parsed
+                                }
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp)
+                                .testTag("edit_quantity_input_field"),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                            )
                         )
+
                         IconButton(
-                            onClick = { quantity += 0.25 },
-                            modifier = Modifier.size(28.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape).testTag("edit_qty_inc")
+                            onClick = {
+                                val curVal = quantityInputStr.toDoubleOrNull() ?: quantity
+                                val newVal = curVal + 0.25
+                                quantity = newVal
+                                quantityInputStr = String.format(Locale.US, "%.2f", newVal)
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape)
+                                .testTag("edit_qty_inc")
                         ) {
                             Text(
                                 "+",
@@ -3612,9 +11188,63 @@ fun DayReportDialog(
     currentDate: String,
     dailyNutrients: List<NutrientStatus>,
     macroSpread: MacroSpreadRatio,
+    currentDateEntries: List<FoodLogEntry>,
+    viewModel: NutritionViewModel,
     onDismiss: () -> Unit
 ) {
     var filterWarningsOnly by remember { mutableStateOf(false) }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var pendingJsonContent by remember { mutableStateOf<String?>(null) }
+    var pendingCsvContent by remember { mutableStateOf<String?>(null) }
+
+    val jsonLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("application/json")
+    ) { uri ->
+        if (uri != null && pendingJsonContent != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write(pendingJsonContent!!.toByteArray(Charsets.UTF_8))
+                    }
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Daily JSON report saved successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Save failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    pendingJsonContent = null
+                }
+            }
+        }
+    }
+
+    val csvLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null && pendingCsvContent != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write(pendingCsvContent!!.toByteArray(Charsets.UTF_8))
+                    }
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Daily CSV report saved successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "Save failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } finally {
+                    pendingCsvContent = null
+                }
+            }
+        }
+    }
 
     val insights = remember(dailyNutrients) {
         getInsights(dailyNutrients)
@@ -3678,6 +11308,118 @@ fun DayReportDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    // 0. Download report card
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("day_report_download_card"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.25f))
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = "Download Report",
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "Download Record-Keeping Reports",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Export today's logs & 41-nutrient RDA analysis as digital records.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        try {
+                                            val jsonString = viewModel.generateDailyReportJson(currentDate, currentDateEntries, dailyNutrients)
+                                            pendingJsonContent = jsonString
+                                            jsonLauncher.launch("nutriscribe-report-$currentDate.json")
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("button_download_json"),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.secondary,
+                                        contentColor = MaterialTheme.colorScheme.onSecondary
+                                    ),
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "JSON File",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                        )
+                                    }
+                                }
+
+                                Button(
+                                    onClick = {
+                                        try {
+                                            val csvString = viewModel.generateDailyReportCsv(currentDate, currentDateEntries, dailyNutrients)
+                                            pendingCsvContent = csvString
+                                            csvLauncher.launch("nutriscribe-report-$currentDate.csv")
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(context, "Error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("button_download_csv"),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.tertiary,
+                                        contentColor = MaterialTheme.colorScheme.onTertiary
+                                    ),
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDropDown,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "CSV Sheet",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // 1. Pie Chart of Macro Spread
                     Card(
                         modifier = Modifier.fillMaxWidth().testTag("day_report_macro_pie_card"),
@@ -4954,6 +12696,60 @@ fun ObservationsTab(viewModel: NutritionViewModel) {
 fun SupplementsTab(viewModel: NutritionViewModel) {
     val supplements by viewModel.allSupplements.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
+    var showBackupImportDialog by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var initialDialogName by remember { mutableStateOf("") }
+    var initialDialogDosage by remember { mutableStateOf("") }
+    var initialDialogNotes by remember { mutableStateOf("") }
+    var initialDialogNutrients by remember { mutableStateOf<Map<String, Double>>(emptyMap()) }
+
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = SafeCreateDocument("application/json")
+    ) { uri ->
+        if (uri != null && pendingExportJson != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                        outputStream.write(pendingExportJson!!.toByteArray(Charsets.UTF_8))
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    pendingExportJson = null
+                }
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        val jsonString = inputStream.bufferedReader().use { it.readText() }
+                        viewModel.importSupplements(jsonString) { success, msg ->
+                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                if (success) {
+                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                    showBackupImportDialog = false
+                                } else {
+                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -5153,8 +12949,29 @@ fun SupplementsTab(viewModel: NutritionViewModel) {
                     BarcodeQRScannerScreen(
                         onDismiss = { showSupplementScanner = false },
                         onBarcodeScanned = { barcode ->
-                            viewModel.addScannedSupplement(barcode)
+                            val resolvedProduct = viewModel.repository.getProductByBarcode(barcode)
+                            if (resolvedProduct != null) {
+                                initialDialogName = resolvedProduct.name
+                                initialDialogDosage = resolvedProduct.dosage
+                                initialDialogNotes = "Scanned: $barcode"
+                                initialDialogNutrients = resolvedProduct.nutrients
+                            } else {
+                                val isNumeric = barcode.trim().all { it.isDigit() }
+                                initialDialogName = if (isNumeric) "Supplement ($barcode)" else barcode
+                                initialDialogDosage = "1 capsule"
+                                initialDialogNotes = "Scanned barcode: $barcode"
+                                initialDialogNutrients = if (isNumeric) emptyMap() else viewModel.repository.estimateSupplementNutrients(barcode, "1 capsule")
+                            }
                             showSupplementScanner = false
+                            showAddDialog = true
+                        },
+                        onOcrScanned = { trackedNutrients ->
+                            initialDialogName = "OCR Scanned Supplement Facts"
+                            initialDialogDosage = "1 capsule"
+                            initialDialogNotes = "OCR Scanned nutritional profile"
+                            initialDialogNutrients = trackedNutrients
+                            showSupplementScanner = false
+                            showAddDialog = true
                         }
                     )
                 }
@@ -5166,7 +12983,13 @@ fun SupplementsTab(viewModel: NutritionViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { showAddDialog = true },
+                        onClick = {
+                            initialDialogName = ""
+                            initialDialogDosage = ""
+                            initialDialogNotes = ""
+                            initialDialogNutrients = emptyMap()
+                            showAddDialog = true
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("add_supplement_trigger_button"),
@@ -5193,6 +13016,30 @@ fun SupplementsTab(viewModel: NutritionViewModel) {
                         Text("Scan QR / Barcode")
                     }
                 }
+
+                // Backup & Import Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { showBackupImportDialog = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("backup_import_supplements_button"),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.primary
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+                    ) {
+                        Icon(imageVector = Icons.Default.Share, contentDescription = "JSON Backup/Import")
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Backup & Import JSON")
+                    }
+                }
             }
 
             item {
@@ -5202,10 +13049,156 @@ fun SupplementsTab(viewModel: NutritionViewModel) {
 
         if (showAddDialog) {
             AddSupplementDialog(
+                initialName = initialDialogName,
+                initialDosage = initialDialogDosage,
+                initialNotes = initialDialogNotes,
+                initialNutrients = initialDialogNutrients,
                 onDismiss = { showAddDialog = false },
-                onConfirm = { name, dosage, freq, days, time, notes ->
-                    viewModel.insertSupplement(name, dosage, freq, days, time, notes)
+                onConfirm = { name, dosage, freq, days, time, notes, nutrients ->
+                    viewModel.insertSupplement(name, dosage, freq, days, time, notes, nutrients)
                     showAddDialog = false
+                }
+            )
+        }
+
+        if (showBackupImportDialog) {
+            var pasteInputVisible by remember { mutableStateOf(false) }
+            var clipboardText by remember { mutableStateOf("") }
+
+            AlertDialog(
+                onDismissRequest = { showBackupImportDialog = false },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Supplement Backup / Import")
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Import or export your supplement schedules seamlessly as standard JSON files or copied text.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        try {
+                                            pendingExportJson = viewModel.getExportSupplementsString()
+                                            exportLauncher.launch("nutriscribe-supplements-backup.json")
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(context, "Export picker failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            ) {
+                                Text("Export File", style = MaterialTheme.typography.labelSmall)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    try {
+                                        importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "System File Picker not available: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Import File", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        val jsonString = viewModel.getExportSupplementsString()
+                                        try {
+                                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            val clip = android.content.ClipData.newPlainText("Supplements Backup", jsonString)
+                                            clipboard.setPrimaryClip(clip)
+                                            android.widget.Toast.makeText(context, "Supplements copied to clipboard!", android.widget.Toast.LENGTH_SHORT).show()
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(context, "Clipboard error: ${e.localizedMessage}", android.widget.Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            ) {
+                                Text("Copy JSON", style = MaterialTheme.typography.labelSmall)
+                            }
+
+                            OutlinedButton(
+                                onClick = { pasteInputVisible = !pasteInputVisible },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(if (pasteInputVisible) "Close Paste" else "Paste JSON", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+
+                        if (pasteInputVisible) {
+                            OutlinedTextField(
+                                value = clipboardText,
+                                onValueChange = { clipboardText = it },
+                                label = { Text("Paste Supplements JSON here") },
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(120.dp),
+                                maxLines = 5,
+                                placeholder = { Text("[ { \"name\": \"Vitamin D3\", ... } ]") }
+                            )
+
+                            Button(
+                                onClick = {
+                                    if (clipboardText.isNotBlank()) {
+                                        viewModel.importSupplements(clipboardText) { success, msg ->
+                                            if (success) {
+                                                clipboardText = ""
+                                                pasteInputVisible = false
+                                                showBackupImportDialog = false
+                                                android.widget.Toast.makeText(context, "Supplements imported successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                android.widget.Toast.makeText(context, "Import failed: $msg", android.widget.Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Text("Parse & Import", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showBackupImportDialog = false }) {
+                        Text("Close")
+                    }
                 }
             )
         }
@@ -5214,13 +13207,18 @@ fun SupplementsTab(viewModel: NutritionViewModel) {
 
 @Composable
 fun AddSupplementDialog(
+    initialName: String = "",
+    initialDosage: String = "",
+    initialFrequency: String = "Once Daily",
+    initialNotes: String = "",
+    initialNutrients: Map<String, Double> = emptyMap(),
     onDismiss: () -> Unit,
-    onConfirm: (String, String, String, String, String, String) -> Unit
+    onConfirm: (String, String, String, String, String, String, Map<String, Double>) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    var dosage by remember { mutableStateOf("") }
-    var frequency by remember { mutableStateOf("Once Daily") }
-    var notes by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(initialName) }
+    var dosage by remember { mutableStateOf(initialDosage) }
+    var frequency by remember { mutableStateOf(initialFrequency) }
+    var notes by remember { mutableStateOf(initialNotes) }
     val timeOfDay = "Morning"
     
     val daysList = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -5231,11 +13229,30 @@ fun AddSupplementDialog(
     var showFreqDropdown by remember { mutableStateOf(false) }
     val frequencies = listOf("Once Daily", "Twice Daily", "Weekly", "Alternate Days")
 
+    // Custom nutrients tracking
+    val activeNutrients = remember { mutableStateMapOf<String, Double>().apply {
+        initialNutrients.forEach { (k, v) -> put(k, v) }
+    } }
+    
+    val nutrientAmounts = remember { mutableStateMapOf<String, String>().apply {
+        initialNutrients.forEach { (k, v) -> put(k, v.toString()) }
+    } }
+
+    var showNutrientDropdown by remember { mutableStateOf(false) }
+    var selectedNutrientToAdd by remember { mutableStateOf<com.example.data.NutrientDefinition?>(null) }
+    var nutrientToAddAmount by remember { mutableStateOf("") }
+
+    val dialogTitleHtml = if (initialNotes.contains("Scanned") || name.any { it.isDigit() }) {
+        "Tailor Scanned Supplement"
+    } else {
+        "Add Supplement Guideline"
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Add Supplement Guideline",
+                text = dialogTitleHtml,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
             )
         },
@@ -5346,6 +13363,182 @@ fun AddSupplementDialog(
                     modifier = Modifier.fillMaxWidth().testTag("add_supplement_notes_input"),
                     singleLine = true
                 )
+
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                // --- CUSTOM NUTRIENTS SECTION ---
+                Text(
+                    text = "Vitamins & Nutrients Content",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                
+                if (activeNutrients.isEmpty()) {
+                    Text(
+                        text = "No clinical ingredients listed. Use the builder below to add content (e.g. minerals or vitamin elements).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    activeNutrients.keys.toList().forEach { nutrientKey ->
+                        val def = com.example.data.Nutrients.getByKey(nutrientKey)
+                        if (def != null) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "${def.name} (${def.unit})",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    modifier = Modifier.weight(1.2f)
+                                )
+
+                                OutlinedTextField(
+                                    value = nutrientAmounts[nutrientKey] ?: "0.0",
+                                    onValueChange = { newValue ->
+                                        if (newValue.all { it.isDigit() || it == '.' }) {
+                                            nutrientAmounts[nutrientKey] = newValue
+                                            val parsed = newValue.toDoubleOrNull() ?: 0.0
+                                            activeNutrients[nutrientKey] = parsed
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .width(90.dp)
+                                        .height(52.dp)
+                                        .testTag("nutrient_input_$nutrientKey"),
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyMedium,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+
+                                IconButton(
+                                    onClick = {
+                                        activeNutrients.remove(nutrientKey)
+                                        nutrientAmounts.remove(nutrientKey)
+                                    },
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Remove nutrient",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Build add nutrient widget
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Add Nutrient Element:",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = { showNutrientDropdown = true },
+                                modifier = Modifier.fillMaxWidth().testTag("add_custom_nutrient_dropdown_btn")
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = selectedNutrientToAdd?.let { "${it.name} (${it.unit})" } ?: "Select Vitamin/Nutrient to Add...",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = "Dropdown")
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = showNutrientDropdown,
+                                onDismissRequest = { showNutrientDropdown = false },
+                                modifier = Modifier.heightIn(max = 240.dp)
+                            ) {
+                                val availableDefs = com.example.data.Nutrients.DEFINITIONS.filter { it.key !in activeNutrients.keys }
+                                if (availableDefs.isEmpty()) {
+                                    DropdownMenuItem(
+                                        text = { Text("All nutrients already added") },
+                                        onClick = { showNutrientDropdown = false }
+                                    )
+                                } else {
+                                    availableDefs.forEach { def ->
+                                        DropdownMenuItem(
+                                            text = { Text("${def.name} (${def.unit})") },
+                                            onClick = {
+                                                selectedNutrientToAdd = def
+                                                showNutrientDropdown = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (selectedNutrientToAdd != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = nutrientToAddAmount,
+                                    onValueChange = { newValue ->
+                                        if (newValue.all { it.isDigit() || it == '.' }) {
+                                            nutrientToAddAmount = newValue
+                                        }
+                                    },
+                                    label = { Text("Amount (${selectedNutrientToAdd?.unit})") },
+                                    placeholder = { Text("e.g. 100") },
+                                    modifier = Modifier.weight(1f).testTag("custom_new_nutrient_amount_field"),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+
+                                Button(
+                                    onClick = {
+                                        val def = selectedNutrientToAdd
+                                        if (def != null && nutrientToAddAmount.isNotBlank()) {
+                                            val amt = nutrientToAddAmount.toDoubleOrNull() ?: 0.0
+                                            activeNutrients[def.key] = amt
+                                            nutrientAmounts[def.key] = nutrientToAddAmount
+                                            // Reset selection
+                                            selectedNutrientToAdd = null
+                                            nutrientToAddAmount = ""
+                                        }
+                                    },
+                                    enabled = nutrientToAddAmount.isNotBlank(),
+                                    modifier = Modifier.height(52.dp).testTag("add_nutrient_item_button")
+                                ) {
+                                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Item")
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Add")
+                                }
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -5357,7 +13550,10 @@ fun AddSupplementDialog(
                         } else {
                             ""
                         }
-                        onConfirm(name, dosage, frequency, daysString, timeOfDay, notes)
+                        val finalNutrients = activeNutrients.mapValues { (k, defaultAmt) ->
+                            nutrientAmounts[k]?.toDoubleOrNull() ?: defaultAmt
+                        }
+                        onConfirm(name, dosage, frequency, daysString, timeOfDay, notes, finalNutrients)
                     }
                 },
                 enabled = name.isNotEmpty() && dosage.isNotEmpty(),
@@ -5419,10 +13615,12 @@ fun CameraPlaceholderUI(cameraPermissionLauncher: androidx.activity.result.Activ
     }
 }
 
+@kotlin.OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun BarcodeQRScannerScreen(
     onDismiss: () -> Unit,
-    onBarcodeScanned: (String) -> Unit
+    onBarcodeScanned: (String) -> Unit,
+    onOcrScanned: ((Map<String, Double>) -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     
@@ -5457,6 +13655,97 @@ fun BarcodeQRScannerScreen(
 
     var customBarcode by remember { mutableStateOf("") }
     var showExplanation by remember { mutableStateOf(false) }
+    var isScannedAlready by remember { mutableStateOf(false) }
+    var isOcrMode by remember { mutableStateOf(false) }
+    var isCameraActive by remember { mutableStateOf(false) }
+
+    // Touch-to-Map OCR Interactive State variables
+    var detectedLines by remember { mutableStateOf(emptySet<String>()) }
+    var mappedNutrients by remember { mutableStateOf(emptyMap<String, Double>()) }
+    var showMappingDialogForLine by remember { mutableStateOf<String?>(null) }
+    var selectedMappedNutrientKey by remember { mutableStateOf("") }
+    var selectedMappedNutrientValueStr by remember { mutableStateOf("") }
+
+    var userUnmappedKeys by remember { mutableStateOf(emptySet<String>()) }
+    var lassoPoints by remember { mutableStateOf(emptyList<androidx.compose.ui.geometry.Offset>()) }
+    var lassoSelectedLines by remember { mutableStateOf(emptySet<String>()) }
+    var activePresetForDrawing by remember { mutableStateOf("B-Complex (PDF Supplement)") }
+    var frozenSnapshotLines by remember { mutableStateOf(emptyList<String>()) }
+    var isGeminiNlpParsing by remember { mutableStateOf(false) }
+    var nlpParseMessage by remember { mutableStateOf<String?>(null) }
+
+    val nutrientDropdownOptions = listOf(
+        "vitamin_a" to "Vitamin A (mcg)",
+        "vitamin_c" to "Vitamin C (mg)",
+        "vitamin_d" to "Vitamin D (mcg)",
+        "vitamin_e" to "Vitamin E (mg)",
+        "vitamin_k" to "Vitamin K (mcg)",
+        "vitamin_b6" to "Vitamin B6 (mg)",
+        "vitamin_b12" to "Vitamin B12 (mcg)",
+        "thiamin" to "Thiamin (B1) (mg)",
+        "riboflavin" to "Riboflavin (B2) (mg)",
+        "niacin" to "Niacin (B3) (mg)",
+        "pantothenic_acid" to "Pantothenic Acid (B5) (mg)",
+        "biotin" to "Biotin (B7) (mcg)",
+        "folate" to "Folate (B9) (mcg)",
+        "choline" to "Choline (mg)",
+        "calcium" to "Calcium (mg)",
+        "iron" to "Iron (mg)",
+        "magnesium" to "Magnesium (mg)",
+        "potassium" to "Potassium (mg)",
+        "sodium" to "Sodium (mg)",
+        "zinc" to "Zinc (mg)",
+        "copper" to "Copper (mg)",
+        "manganese" to "Manganese (mg)",
+        "selenium" to "Selenium (mcg)",
+        "chromium" to "Chromium (mcg)",
+        "molybdenum" to "Molybdenum (mcg)",
+        "iodine" to "Iodine (mcg)",
+        "carbohydrates" to "Carbohydrates (g)",
+        "protein" to "Protein (g)",
+        "calories" to "Calories (kcal)",
+        "fat" to "Fat (g)",
+        "fiber" to "Fiber (g)"
+    )
+
+    // Pre-calculated preset text associations so users can test interactive mapper manually
+    val ocrPresetRawTexts = mapOf(
+        "B-Complex (PDF Supplement)" to listOf(
+            "Thiamin (vitamin B1) (as thiamin mononitrate) 50 mg 4,167%",
+            "Riboflavin (vitamin B2) 50 mg 3,846%",
+            "Niacin (vitamin B3) (as niacinamide) 50 mg 313%",
+            "Vitamin B6 (as pyridoxine HCl) 50 mg 2,941%",
+            "Folate 666 mcg DFE (400 mcg folic acid) 167%",
+            "Vitamin B12 (as cyanocobalamin) 50 mcg 2,083%"
+        ),
+        "Multi-Daily (10+ items)" to listOf(
+            "Vitamin A 900 mcg 100%",
+            "Vitamin C 120 mg 133%",
+            "Vitamin D 20 mcg 100%",
+            "Vitamin E 15 mg 100%",
+            "Vitamin B6 2 mg 118%",
+            "Vitamin B12 6 mcg 250%",
+            "Calcium 150 mg 12%",
+            "Zinc 11 mg 100%",
+            "Magnesium 100 mg 24%",
+            "Iron 18 mg 100%"
+        ),
+        "D3 + K2 Complex Table" to listOf(
+            "Vitamin D3 125 mcg (5000 IU)",
+            "Vitamin K2 90 mcg (as MK-7)",
+            "Calcium 50 mg (as Carbonate)"
+        ),
+        "ZMA Recovery Tablet" to listOf(
+            "Zinc (as L-Monomethionine) 30 mg",
+            "Magnesium Aspartate 450 mg",
+            "Vitamin B6 (as Pyridoxine) 10.5 mg"
+        ),
+        "Electrolytes Matrix" to listOf(
+            "Sodium (as Chloride) 250 mg",
+            "Potassium (as Citrate) 180 mg",
+            "Magnesium (as Glycinate) 90 mg"
+        )
+    )
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -5466,11 +13755,82 @@ fun BarcodeQRScannerScreen(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                // 1. Camera View or Placeholder if no permission
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .systemBarsPadding()
+            ) {
+                // Header Area with Scanner Modes Tab Selector
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = if (isOcrMode) Color(0xFF38BDF8) else Color(0xFF4ADE80),
+                                shape = CircleShape,
+                                modifier = Modifier.size(8.dp)
+                            ) {}
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (isOcrMode) "SUPPLEMENT FACTS OCR" else "BARCODE / QR CODES",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.5.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.3f), CircleShape)
+                                .testTag("scanner_close_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close Scanner",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+
+                    // TabRow switcher to change modes
+                    TabRow(
+                        selectedTabIndex = if (isOcrMode) 1 else 0,
+                        containerColor = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(40.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    ) {
+                        Tab(
+                            selected = !isOcrMode,
+                            onClick = { isOcrMode = false },
+                            text = { Text("Barcode Scan", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface) }
+                        )
+                        Tab(
+                            selected = isOcrMode,
+                            onClick = { isOcrMode = true },
+                            text = { Text("OCR Table Scan", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface) }
+                        )
+                    }
+                }
+
+                // Dedicated sticky camera viewport at top
                 var isCameraSupported by remember { mutableStateOf(true) }
 
-                if (hasCameraPermission && isCameraSupported) {
+                if (hasCameraPermission && isCameraSupported && isCameraActive) {
                     val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
                     val cameraProviderFuture = remember {
                         try {
@@ -5481,194 +13841,277 @@ fun BarcodeQRScannerScreen(
                             null
                         }
                     }
-                    
+
                     if (cameraProviderFuture != null) {
                         androidx.compose.runtime.DisposableEffect(lifecycleOwner, cameraProviderFuture) {
                             onDispose {
                                 try {
-                                    val provider = cameraProviderFuture.get()
-                                    provider.unbindAll()
+                                    if (cameraProviderFuture.isDone) {
+                                        val provider = cameraProviderFuture.get()
+                                        provider.unbindAll()
+                                    }
                                 } catch (t: Throwable) {
                                     android.util.Log.e("Scanner", "Clean up camera unbind failed", t)
                                 }
                             }
                         }
 
-                        AndroidView(
-                            factory = { ctx ->
-                                val previewView = PreviewView(ctx)
-                                val executor = ContextCompat.getMainExecutor(ctx)
-                                cameraProviderFuture.addListener({
-                                    try {
-                                        val cameraProvider = cameraProviderFuture.get()
-                                        val preview = androidx.camera.core.Preview.Builder().build().also {
-                                            it.setSurfaceProvider(previewView.surfaceProvider)
-                                        }
-                                        val cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
-                                        cameraProvider.unbindAll()
-                                        cameraProvider.bindToLifecycle(
-                                            lifecycleOwner,
-                                            cameraSelector,
-                                            preview
-                                        )
-                                    } catch (exc: Throwable) {
-                                        android.util.Log.e("Scanner", "Use case binding failed", exc)
-                                    }
-                                }, executor)
-                                previewView
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        CameraPlaceholderUI(cameraPermissionLauncher)
-                    }
-                } else {
-                    CameraPlaceholderUI(cameraPermissionLauncher)
-                }
-
-                // 2. Translucent Viewfinder Overlay Mask
-                Box(
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    // Dark columns and rows surrounding the centered target viewfinder
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        // Top mask space
                         Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .background(Color.Black.copy(alpha = 0.65f))
-                        )
-                        // Middle viewfinder row
-                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(260.dp)
+                                .background(Color.Black)
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .border(BorderStroke(2.dp, if (isOcrMode) Color(0xFF38BDF8) else Color(0xFF4ADE80)), RoundedCornerShape(12.dp))
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .background(Color.Black.copy(alpha = 0.65f))
+                            AndroidView(
+                                factory = { ctx ->
+                                    val previewView = PreviewView(ctx)
+                                    previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+                                    val executor = ContextCompat.getMainExecutor(ctx)
+                                    cameraProviderFuture.addListener({
+                                        try {
+                                            val cameraProvider = cameraProviderFuture.get()
+                                            val preview = androidx.camera.core.Preview.Builder().build().also {
+                                                it.setSurfaceProvider(previewView.surfaceProvider)
+                                            }
+
+                                            val imageAnalysis = androidx.camera.core.ImageAnalysis.Builder()
+                                                .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                                .build()
+
+                                            val barcodeScanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
+                                            val textRecognizer = com.google.mlkit.vision.text.TextRecognition.getClient(
+                                                com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS
+                                            )
+
+                                            imageAnalysis.setAnalyzer(executor) { imageProxy ->
+                                                @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
+                                                val mediaImage = imageProxy.image
+                                                if (mediaImage != null && !isScannedAlready) {
+                                                    val image = com.google.mlkit.vision.common.InputImage.fromMediaImage(
+                                                        mediaImage,
+                                                        imageProxy.imageInfo.rotationDegrees
+                                                    )
+                                                    if (isOcrMode) {
+                                                        textRecognizer.process(image)
+                                                            .addOnSuccessListener { visionText ->
+                                                                val newDetected = mutableSetOf<String>()
+                                                                for (block in visionText.textBlocks) {
+                                                                    for (line in block.lines) {
+                                                                        val txt = line.text.trim()
+                                                                        if (txt.length > 3 && !txt.all { !it.isLetterOrDigit() }) {
+                                                                            newDetected.add(txt)
+                                                                        }
+                                                                    }
+                                                                }
+                                                                if (newDetected.isNotEmpty()) {
+                                                                    detectedLines = (detectedLines + newDetected).take(30).toSet()
+
+                                                                    val freshMap = mappedNutrients.toMutableMap()
+                                                                    newDetected.forEach { lineText ->
+                                                                        val parsed = parseNutrientFromLine(lineText)
+                                                                        if (parsed != null && !freshMap.containsKey(parsed.first) && !userUnmappedKeys.contains(parsed.first)) {
+                                                                            freshMap[parsed.first] = parsed.second
+                                                                        }
+                                                                    }
+                                                                    mappedNutrients = freshMap
+                                                                }
+                                                            }
+                                                            .addOnFailureListener { t ->
+                                                                android.util.Log.e("Scanner", "OCR failure", t)
+                                                            }
+                                                            .addOnCompleteListener {
+                                                                imageProxy.close()
+                                                            }
+                                                    } else {
+                                                        barcodeScanner.process(image)
+                                                            .addOnSuccessListener { barcodes ->
+                                                                for (barcode in barcodes) {
+                                                                    val rawValue = barcode.rawValue
+                                                                    if (rawValue != null && rawValue.isNotBlank() && !isScannedAlready) {
+                                                                        isScannedAlready = true
+                                                                        onBarcodeScanned(rawValue)
+                                                                        break
+                                                                    }
+                                                                }
+                                                            }
+                                                            .addOnFailureListener { t ->
+                                                                android.util.Log.e("Scanner", "Analysis failure", t)
+                                                            }
+                                                            .addOnCompleteListener {
+                                                                imageProxy.close()
+                                                            }
+                                                    }
+                                                } else {
+                                                    imageProxy.close()
+                                                }
+                                            }
+
+                                            val cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
+                                            cameraProvider.unbindAll()
+                                            cameraProvider.bindToLifecycle(
+                                                lifecycleOwner,
+                                                cameraSelector,
+                                                preview,
+                                                imageAnalysis
+                                            )
+                                        } catch (exc: Throwable) {
+                                            android.util.Log.e("Scanner", "Use case binding failed", exc)
+                                        }
+                                    }, executor)
+                                    previewView
+                                },
+                                modifier = Modifier.fillMaxSize()
                             )
-                            // Clean Viewfinder Window Square
-                            Box(
-                                modifier = Modifier
-                                    .size(260.dp)
-                                    .testTag("scanner_viewfinder_scope")
-                            ) {
-                                // Draw corner braces bounding scope
-                                val braceColor = MaterialTheme.colorScheme.primary
-                                val braceThickness = 4.dp
-                                val braceLength = 24.dp
 
-                                // Top-Left corner
-                                Box(modifier = Modifier.align(Alignment.TopStart).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(topStart = 12.dp)).clip(RoundedCornerShape(topStart = 12.dp)))
-                                // Top-Right corner
-                                Box(modifier = Modifier.align(Alignment.TopEnd).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(topEnd = 12.dp)).clip(RoundedCornerShape(topEnd = 12.dp)))
-                                // Bottom-Left corner
-                                Box(modifier = Modifier.align(Alignment.BottomStart).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(bottomStart = 12.dp)).clip(RoundedCornerShape(bottomStart = 12.dp)))
-                                // Bottom-Right corner
-                                Box(modifier = Modifier.align(Alignment.BottomEnd).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(bottomEnd = 12.dp)).clip(RoundedCornerShape(bottomEnd = 12.dp)))
-
-                                // Moving laser scanning sweep line (offset coordinates)
+                            // Overlay scope braces inside box
+                            Box(modifier = Modifier.fillMaxSize()) {
                                 Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(3.dp)
-                                        .offset(y = 260.dp * laserFraction)
-                                        .background(
-                                            Brush.horizontalGradient(
-                                                listOf(
-                                                    Color.Transparent,
-                                                    Color(0xFF4ADE80),
-                                                    Color(0xFF22C55E),
-                                                    Color(0xFF4ADE80),
-                                                    Color.Transparent
+                                        .size(160.dp)
+                                        .align(Alignment.Center)
+                                        .testTag("scanner_viewfinder_scope")
+                                ) {
+                                    val braceColor = if (isOcrMode) Color(0xFF38BDF8) else Color(0xFF4ADE80)
+                                    val braceThickness = 4.dp
+                                    val braceLength = 20.dp
+
+                                    Box(modifier = Modifier.align(Alignment.TopStart).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(topStart = 8.dp)).clip(RoundedCornerShape(topStart = 8.dp)))
+                                    Box(modifier = Modifier.align(Alignment.TopEnd).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(topEnd = 8.dp)).clip(RoundedCornerShape(topEnd = 8.dp)))
+                                    Box(modifier = Modifier.align(Alignment.BottomStart).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(bottomStart = 8.dp)).clip(RoundedCornerShape(bottomStart = 8.dp)))
+                                    Box(modifier = Modifier.align(Alignment.BottomEnd).size(braceLength).border(BorderStroke(braceThickness, braceColor), shape = RoundedCornerShape(bottomEnd = 8.dp)).clip(RoundedCornerShape(bottomEnd = 8.dp)))
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(3.dp)
+                                            .offset(y = 160.dp * laserFraction)
+                                            .background(
+                                                Brush.horizontalGradient(
+                                                    listOf(
+                                                        Color.Transparent,
+                                                        braceColor.copy(alpha = 0.5f),
+                                                        braceColor,
+                                                        braceColor.copy(alpha = 0.5f),
+                                                        Color.Transparent
+                                                    )
                                                 )
                                             )
-                                        )
-                                )
+                                    )
+                                }
                             }
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .background(Color.Black.copy(alpha = 0.65f))
-                            )
                         }
-                        // Bottom mask space
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1.3f)
-                                .background(Color.Black.copy(alpha = 0.65f))
-                        )
                     }
                 }
 
-                // 3. Scanner HUD & Control UI Panels
+                // Lower section: Scrollable Content Column
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 16.dp, vertical = 24.dp),
-                    verticalArrangement = Arrangement.SpaceBetween
+                        .weight(1f)
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // Header Area
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.primary,
-                                shape = CircleShape,
-                                modifier = Modifier.size(8.dp)
-                            ) {}
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "BARCODE / QR ENGINE",
-                                style = MaterialTheme.typography.titleSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 2.sp
-                                ),
-                                color = Color.White
-                            )
-                        }
-
-                        IconButton(
-                            onClick = onDismiss,
-                            modifier = Modifier
-                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                                .testTag("scanner_close_button")
+                    if (isCameraActive) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = (if (isOcrMode) Color(0xFF38BDF8) else Color(0xFF4ADE80)).copy(alpha = 0.1f)
+                            ),
+                            border = BorderStroke(1.dp, (if (isOcrMode) Color(0xFF38BDF8) else Color(0xFF4ADE80)).copy(alpha = 0.3f)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close Scanner",
-                                tint = Color.White
-                            )
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (isOcrMode) "Table OCR Active" else "Barcode Scan Active",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = if (isOcrMode) Color(0xFF0284C7) else Color(0xFF16A34A)
+                                    )
+                                    Text(
+                                        text = if (isOcrMode) "Align supplement facts table to capture lines" else "Point at product barcode label",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { isCameraActive = false }
+                                ) {
+                                    Text("Pause Camera")
+                                }
+                            }
                         }
-                    }
+                    } else {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                            ),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth().testTag("scanner_camera_activation_card")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.QrCode,
+                                            contentDescription = "Camera",
+                                            tint = MaterialTheme.colorScheme.onPrimary,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
 
-                    // Scope Hint Text middle
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 120.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "Align Barcode / QR Label",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Keep steady to scan automatically",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.LightGray
-                        )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Live Camera Scanner Offline",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "To preserve resources or scanner capability, use the Simulator/Manual tools below, or enable the live feed:",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Button(
+                                        onClick = {
+                                            if (!hasCameraPermission) {
+                                                cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                                            } else {
+                                                isCameraActive = true
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.QrCode, contentDescription = "CameraOn")
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Activate Live Camera")
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // BOTTOM INTERACTIVE LIVE SIMULATOR CONTROL PANEL
@@ -5697,7 +14140,7 @@ fun BarcodeQRScannerScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Web Emulator Scan Simulator",
+                                        text = if (isOcrMode) "Web OCR Table Scan Simulator" else "Web Barcode Scan Simulator",
                                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
@@ -5713,7 +14156,9 @@ fun BarcodeQRScannerScreen(
                             if (showExplanation) {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Since this app is running inside a cloud browser streaming window, direct physical camera scanner hardware is simulated. Choose one of our pre-coded smart nutrition products below, or type in a barcode UPC to mock-simulate a successful scan stream.",
+                                    text = if (isOcrMode) 
+                                        "Since this app runs inside a cloud browser, direct physical camera OCR is simulated here. Choose a pre-coded nutrition facts table preset, or copy-paste ingredient facts below to test the text extractor regex!" 
+                                        else "Since this app runs inside a cloud browser, camera barcodes are simulated. Choose a supplement product preset or provide a custom barcode code to test auto-loggers.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -5721,99 +14166,4345 @@ fun BarcodeQRScannerScreen(
 
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // Presets Row (horizontal scroll chips)
-                            Text(
-                                text = "Select Product to Simulate Scan:",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(bottom = 6.dp)
-                            )
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                val presets = listOf(
-                                    Triple("Greek Yogurt", "041500000251", "Food"),
-                                    Triple("Whey Protein", "885101234567", "Supplement"),
-                                    Triple("Multivitamin", "190111222333", "Supplement"),
-                                    Triple("Magnesium Glycinate", "301234567890", "Supplement"),
-                                    Triple("Organic Oats", "012000000133", "Food"),
-                                    Triple("Matcha Green Tea", "490000004433", "Tea/Food")
+                            if (isOcrMode) {
+                                // OCR PRESETS ROW
+                                Text(
+                                    text = "Select Scanned Table Preset to Simulate OCR:",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(bottom = 6.dp)
                                 )
 
-                                presets.forEach { (name, upc, category) ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    val ocrPresets = listOf(
+                                        Pair("B-Complex (PDF Supplement)", mapOf(
+                                            "thiamin" to 50.0,
+                                            "riboflavin" to 50.0,
+                                            "niacin" to 50.0,
+                                            "vitamin_b6" to 50.0,
+                                            "folate" to 666.0,
+                                            "vitamin_b12" to 50.0
+                                        )),
+                                        Pair("Multi-Daily (10+ items)", mapOf(
+                                            "vitamin_a" to 900.0,
+                                            "vitamin_c" to 120.0,
+                                            "vitamin_d" to 20.0,
+                                            "vitamin_e" to 15.0,
+                                            "vitamin_b6" to 2.0,
+                                            "vitamin_b12" to 6.0,
+                                            "calcium" to 150.0,
+                                            "zinc" to 11.0,
+                                            "magnesium" to 100.0,
+                                            "iron" to 18.0
+                                        )),
+                                        Pair("D3 + K2 Complex Table", mapOf(
+                                            "vitamin_d" to 125.0,
+                                            "vitamin_k" to 90.0,
+                                            "calcium" to 50.0
+                                        )),
+                                        Pair("ZMA Recovery Tablet", mapOf(
+                                            "zinc" to 30.0,
+                                            "magnesium" to 450.0,
+                                            "vitamin_b6" to 10.5
+                                        )),
+                                        Pair("Electrolytes Matrix", mapOf(
+                                            "sodium" to 250.0,
+                                            "potassium" to 180.0,
+                                            "magnesium" to 90.0
+                                        ))
+                                    )
+
+                                    ocrPresets.forEach { (name, mapping) ->
+                                        Button(
+                                            onClick = {
+                                                val rawList = ocrPresetRawTexts[name] ?: emptyList()
+                                                activePresetForDrawing = name
+                                                detectedLines = rawList.toSet()
+                                                mappedNutrients = mapping
+                                                userUnmappedKeys = emptySet()
+                                                lassoPoints = emptyList()
+                                                lassoSelectedLines = emptySet()
+                                                nlpParseMessage = null
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                            modifier = Modifier
+                                                .height(34.dp)
+                                                .testTag("mock_ocr_preset_${name.replace(" ", "_").replace("(", "").replace(")", "").replace("+", "")}")
+                                        ) {
+                                            Text(
+                                                text = name,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                        }
+                                    }
+
                                     Button(
                                         onClick = {
-                                            onBarcodeScanned(upc)
+                                            detectedLines = emptySet()
+                                            mappedNutrients = emptyMap()
+                                            userUnmappedKeys = emptySet()
+                                            lassoPoints = emptyList()
+                                            lassoSelectedLines = emptySet()
+                                            nlpParseMessage = null
                                         },
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = if (category == "Supplement") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                                            contentColor = if (category == "Supplement") MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
+                                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                                            contentColor = MaterialTheme.colorScheme.onErrorContainer
                                         ),
                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                         modifier = Modifier
                                             .height(34.dp)
-                                            .testTag("mock_scan_preset_$upc")
+                                            .testTag("mock_ocr_preset_clear_all")
                                     ) {
                                         Text(
-                                            text = "$name ($category)",
+                                            text = "🗑 Clear All",
                                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                                         )
                                     }
                                 }
-                            }
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
 
-                            // Custom Text QR scanner input
-                            Text(
-                                text = "Or Scan Custom Text QR Code / Barcode ID:",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(bottom = 6.dp)
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedTextField(
-                                    value = customBarcode,
-                                    onValueChange = { customBarcode = it },
-                                    placeholder = { Text("e.g., Vitamin D3, 5000 IU or UPC code") },
-                                    singleLine = true,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(52.dp)
-                                        .testTag("custom_scan_input_field"),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedContainerColor = Color.Transparent,
-                                        unfocusedContainerColor = Color.Transparent
-                                    ),
-                                    textStyle = MaterialTheme.typography.bodyMedium
+                                // Pasting raw text to extract regex
+                                Text(
+                                    text = "Or Paste Copy-Pasted Table Label text to extract:",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 6.dp)
                                 )
 
-                                Button(
-                                    onClick = {
-                                        if (customBarcode.isNotBlank()) {
-                                            onBarcodeScanned(customBarcode)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    var pastedText by remember { mutableStateOf("") }
+                                    
+                                    OutlinedTextField(
+                                        value = pastedText,
+                                        onValueChange = { pastedText = it },
+                                        placeholder = { Text("e.g. Vitamin C 500mg\nZinc 15mg\nCalcium 300mg") },
+                                        singleLine = false,
+                                        maxLines = 3,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(56.dp)
+                                            .testTag("custom_ocr_pasted_field"),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent
+                                        ),
+                                        textStyle = MaterialTheme.typography.bodySmall
+                                    )
+
+                                    Button(
+                                        onClick = {
+                                            if (pastedText.isNotBlank()) {
+                                                val rawSplit = pastedText.lines().map { it.trim() }.filter { it.length > 3 }
+                                                frozenSnapshotLines = rawSplit
+                                                activePresetForDrawing = "📸 Frozen Scanner Snapshot"
+                                                detectedLines = rawSplit.toSet()
+                                                
+                                                val freshMap = mutableMapOf<String, Double>()
+                                                rawSplit.forEach { line ->
+                                                    val parsed = parseNutrientFromLine(line)
+                                                    if (parsed != null) {
+                                                        freshMap[parsed.first] = parsed.second
+                                                    }
+                                                }
+                                                mappedNutrients = freshMap
+                                                userUnmappedKeys = emptySet()
+                                                lassoPoints = emptyList()
+                                                lassoSelectedLines = emptySet()
+                                                nlpParseMessage = null
+                                            }
+                                        },
+                                        enabled = pastedText.isNotBlank(),
+                                        modifier = Modifier
+                                            .height(52.dp)
+                                            .testTag("custom_ocr_parse_submit_button")
+                                    ) {
+                                        Icon(imageVector = Icons.Default.CheckCircle, contentDescription = "Parse text")
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Extract")
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // --- HIGH-FIDELITY LASSO DRAWING AND NLP PARSING PLAYGROUND ---
+                                Card(
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    ),
+                                    shape = RoundedCornerShape(16.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(14.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Info,
+                                                    contentDescription = "Lasso Circle Selector",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "Interactive Document Draw & Lasso",
+                                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
                                         }
-                                    },
-                                    enabled = customBarcode.isNotBlank(),
+
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "Draw a visual circle loop with your finger or mouse over the facts on the label paper below to select. Click Gemini NLP Parsing to merge overlaps, correct duplicates, and clean redundancies!",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
+                                        Spacer(modifier = Modifier.height(10.dp))
+
+                                        // Dropdown/Selector & Clipboard freeze buttons
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Select Preset dropdown or snapshot
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("Select Active Paper Sheet document:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable {
+                                                            // Cycle presets
+                                                            val optionList = listOf("B-Complex (PDF Supplement)", "Multi-Daily (10+ items)", "D3 + K2 Complex Table", "ZMA Recovery Tablet", "Electrolytes Matrix") + if (frozenSnapshotLines.isNotEmpty()) listOf("📸 Frozen Scanner Snapshot") else emptyList()
+                                                            val curIdx = optionList.indexOf(activePresetForDrawing)
+                                                            val nextIdx = (curIdx + 1) % optionList.size
+                                                            activePresetForDrawing = optionList[nextIdx]
+                                                            lassoPoints = emptyList()
+                                                            lassoSelectedLines = emptySet()
+                                                        }
+                                                        .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Text(activePresetForDrawing, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = "Cycle Presets", tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                                                }
+                                            }
+
+                                            // Camera freeze button
+                                            Button(
+                                                onClick = {
+                                                    if (detectedLines.isNotEmpty()) {
+                                                        frozenSnapshotLines = detectedLines.toList()
+                                                        activePresetForDrawing = "📸 Frozen Scanner Snapshot"
+                                                        lassoPoints = emptyList()
+                                                        lassoSelectedLines = emptySet()
+                                                    } else {
+                                                        Toast.makeText(context, "No scanner lines captured yet! Enable feed first.", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                },
+                                                modifier = Modifier.align(Alignment.Bottom),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                                ),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                            ) {
+                                                Text("📸 Freeze Scanner Frame", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(10.dp))
+
+                                        // --- DRAWING ARENA CANVAS ---
+                                        BoxWithConstraints(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(240.dp)
+                                                .background(Color(0xFFFCFBF7), RoundedCornerShape(12.dp))
+                                                .border(BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)), RoundedCornerShape(12.dp))
+                                                .testTag("interactive_lasso_drawing_board")
+                                        ) {
+                                            val density = androidx.compose.ui.platform.LocalDensity.current
+                                            val heightPx = with(density) { 240.dp.toPx() }
+
+                                            // Background supplement label mockup lines
+                                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                                drawRect(
+                                                    color = Color(0xFFF1EDE4),
+                                                    topLeft = androidx.compose.ui.geometry.Offset(10f, 10f),
+                                                    size = androidx.compose.ui.geometry.Size(size.width - 20f, size.height - 20f),
+                                                    style = Stroke(width = 1f)
+                                                )
+                                                var y = 25f
+                                                while (y < size.height) {
+                                                    drawLine(
+                                                        color = Color(0xFFEFECE4),
+                                                        start = androidx.compose.ui.geometry.Offset(10f, y),
+                                                        end = androidx.compose.ui.geometry.Offset(size.width - 10f, y),
+                                                        strokeWidth = 1f
+                                                    )
+                                                    y += 32f
+                                                }
+                                            }
+
+                                            // Get elements based on active item
+                                            val activePresetLines = if (activePresetForDrawing == "📸 Frozen Scanner Snapshot") frozenSnapshotLines else (ocrPresetRawTexts[activePresetForDrawing] ?: emptyList())
+                                            val linesCount = activePresetLines.size
+
+                                            if (activePresetLines.isEmpty()) {
+                                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                                    Text("Prescription label sheet empty. Select a preset above or tap 'Freeze'!", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                                }
+                                            } else {
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .padding(14.dp),
+                                                    verticalArrangement = Arrangement.SpaceEvenly
+                                                ) {
+                                                    activePresetLines.forEachIndexed { idx, line ->
+                                                        val isCurCircled = lassoSelectedLines.contains(line)
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .background(
+                                                                    if (isCurCircled) Color(0xFF22C55E).copy(alpha = 0.12f) else Color.Transparent,
+                                                                    RoundedCornerShape(4.dp)
+                                                                )
+                                                                .border(
+                                                                    if (isCurCircled) BorderStroke(1.dp, Color(0xFF22C55E).copy(alpha = 0.7f)) else BorderStroke(0.dp, Color.Transparent),
+                                                                    RoundedCornerShape(4.dp)
+                                                                )
+                                                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Text(
+                                                                text = line,
+                                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                                color = if (isCurCircled) Color(0xFF15803D) else Color.DarkGray,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis,
+                                                                modifier = Modifier.weight(1f)
+                                                            )
+                                                            if (isCurCircled) {
+                                                                Text(
+                                                                    text = "✓ Circled",
+                                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 8.sp),
+                                                                    color = Color(0xFF15803D),
+                                                                    modifier = Modifier.padding(start = 4.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // Drawing Transparent Lasso Canvas
+                                            Canvas(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .pointerInput(activePresetForDrawing) {
+                                                        detectDragGestures(
+                                                            onDragStart = { startOffset ->
+                                                                lassoPoints = listOf(startOffset)
+                                                            },
+                                                            onDragEnd = {
+                                                                if (lassoPoints.size > 2) {
+                                                                    val minY = lassoPoints.minOf { it.y }
+                                                                    val maxY = lassoPoints.maxOf { it.y }
+                                                                    val newlySelected = mutableSetOf<String>()
+                                                                    
+                                                                    if (linesCount > 0) {
+                                                                        val heightPerLine = heightPx / (linesCount + 1)
+                                                                        activePresetLines.forEachIndexed { idx, line ->
+                                                                            val lineYCenter = (idx + 1) * heightPerLine
+                                                                            if (lineYCenter in minY..maxY) {
+                                                                                newlySelected.add(line)
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    lassoSelectedLines = newlySelected
+                                                                }
+                                                            },
+                                                            onDragCancel = {
+                                                                lassoPoints = emptyList()
+                                                            },
+                                                            onDrag = { change, dragAmount ->
+                                                                change.consume()
+                                                                lassoPoints = lassoPoints + change.position
+                                                            }
+                                                        )
+                                                    }
+                                            ) {
+                                                if (lassoPoints.size > 1) {
+                                                    val p = Path()
+                                                    p.moveTo(lassoPoints.first().x, lassoPoints.first().y)
+                                                    for (i in 1 until lassoPoints.size) {
+                                                        p.lineTo(lassoPoints[i].x, lassoPoints[i].y)
+                                                    }
+                                                    drawPath(
+                                                        path = p,
+                                                        color = Color(0xFF22C55E),
+                                                        style = Stroke(width = 6f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+                                                    )
+                                                    drawPath(
+                                                        path = p,
+                                                        color = Color.White,
+                                                        style = Stroke(width = 2f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(10.dp))
+
+                                        // Operations & Results status
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            // Run Gemini or Local NLP Model solver
+                                            val scope = rememberCoroutineScope()
+                                            
+                                            Button(
+                                                onClick = {
+                                                    if (lassoSelectedLines.isNotEmpty()) {
+                                                        isGeminiNlpParsing = true
+                                                        nlpParseMessage = "Optimizing with Gemini AI..."
+                                                        
+                                                        // Load onto detected lines list to also keep visible
+                                                        detectedLines = (detectedLines + lassoSelectedLines).toSet()
+
+                                                        scope.launch(Dispatchers.IO) {
+                                                            val apiKey = try {
+                                                                com.example.BuildConfig.GEMINI_API_KEY
+                                                            } catch (e: Throwable) {
+                                                                ""
+                                                            }
+
+                                                            // Subroutine helper for local cleanup
+                                                            val runLocalNlpParsing: (List<String>) -> Map<String, Double> = { lines ->
+                                                                val deduplicated = mutableMapOf<String, Double>()
+                                                                lines.forEach { line ->
+                                                                    val parsed = parseNutrientFromLine(line)
+                                                                    if (parsed != null) {
+                                                                        val existing = deduplicated[parsed.first]
+                                                                        if (existing == null || parsed.second > existing) {
+                                                                            deduplicated[parsed.first] = parsed.second
+                                                                        }
+                                                                    }
+                                                                }
+                                                                deduplicated
+                                                            }
+
+                                                            if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
+                                                                // Local fallback NLP
+                                                                val locResults = runLocalNlpParsing(lassoSelectedLines.toList())
+                                                                withContext(Dispatchers.Main) {
+                                                                    val freshMap = mappedNutrients.toMutableMap()
+                                                                    locResults.forEach { (k, v) ->
+                                                                        freshMap[k] = v
+                                                                    }
+                                                                    mappedNutrients = freshMap
+                                                                    isGeminiNlpParsing = false
+                                                                    nlpParseMessage = "Local NLP deduplicator optimized and mapped ${locResults.size} nutrients successfully!"
+                                                                }
+                                                            } else {
+                                                                // Real Gemini NLP
+                                                                val prompt = """
+                                                                    You are an expert nutrition and supplements table parser. Analyze the following OCR scanned lines from a supplement label:
+                                                                    ${lassoSelectedLines.joinToString("\n")}
+                                                                    
+                                                                    Identify any overlapping, duplicated, or redundant nutritional facts. For example, if there are multiple lines referring to B12 or Vitamin C, parse the correct ingredient and quantity and resolve them into a single entry to eliminate duplicates.
+                                                                    Mapped keys MUST be chosen exactly from this list of standard keys:
+                                                                    [vitamin_a, vitamin_c, vitamin_d, vitamin_e, vitamin_k, thiamin, riboflavin, niacin, pantothenic_acid, biotin, folate, vitamin_b6, vitamin_b12, choline, calcium, iron, magnesium, potassium, sodium, zinc, copper, manganese, selenium, chromium, molybdenum, iodine, calories, carbohydrates, protein, fat, fiber]
+                                                                    
+                                                                    Return ONLY a valid JSON array of objects, where each object has a "key" and a "value" (floating double number).
+                                                                    Example clean output:
+                                                                    [{"key": "vitamin_c", "value": 500.0}]
+                                                                    
+                                                                    Do not include any other explanations, markdown formatting, or chat responses.
+                                                                """.trimIndent()
+
+                                                                val jsonBody = """
+                                                                    {
+                                                                      "contents": [
+                                                                        {
+                                                                          "parts": [
+                                                                            {
+                                                                              "text": ${org.json.JSONObject.quote(prompt)}
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ],
+                                                                      "generationConfig": {
+                                                                        "responseMimeType": "application/json"
+                                                                      }
+                                                                    }
+                                                                """.trimIndent()
+
+                                                                try {
+                                                                    val okHttpClient = okhttp3.OkHttpClient()
+                                                                    val request = okhttp3.Request.Builder()
+                                                                        .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+                                                                        .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                                                                        .build()
+                                                                        
+                                                                    val response = okHttpClient.newCall(request).execute()
+                                                                    if (response.isSuccessful) {
+                                                                        val reply = response.body?.string() ?: ""
+                                                                        val resultsMap = mutableMapOf<String, Double>()
+                                                                        
+                                                                        val candidateObj = org.json.JSONObject(reply)
+                                                                        val candidatesArray = candidateObj.getJSONArray("candidates")
+                                                                        if (candidatesArray.length() > 0) {
+                                                                            val partObj = candidatesArray.getJSONObject(0)
+                                                                                .getJSONObject("content")
+                                                                                .getJSONArray("parts")
+                                                                                .getJSONObject(0)
+                                                                            val rawText = partObj.getString("text").trim()
+                                                                            
+                                                                            val parsedArray = org.json.JSONArray(rawText)
+                                                                            for (i in 0 until parsedArray.length()) {
+                                                                                val obj = parsedArray.getJSONObject(i)
+                                                                                val k = obj.getString("key")
+                                                                                val v = obj.getDouble("value")
+                                                                                resultsMap[k] = v
+                                                                            }
+                                                                        }
+                                                                        
+                                                                        withContext(Dispatchers.Main) {
+                                                                            if (resultsMap.isNotEmpty()) {
+                                                                                val freshMap = mappedNutrients.toMutableMap()
+                                                                                resultsMap.forEach { (k, v) ->
+                                                                                    freshMap[k] = v
+                                                                                }
+                                                                                mappedNutrients = freshMap
+                                                                                nlpParseMessage = "Gemini AI NLP optimized and mapped ${resultsMap.size} items successfully!"
+                                                                            } else {
+                                                                                val locResults = runLocalNlpParsing(lassoSelectedLines.toList())
+                                                                                val freshMap = mappedNutrients.toMutableMap()
+                                                                                locResults.forEach { (k, v) ->
+                                                                                    freshMap[k] = v
+                                                                                }
+                                                                                mappedNutrients = freshMap
+                                                                                nlpParseMessage = "Local fallback finalized mapping for ${locResults.size} components."
+                                                                            }
+                                                                            isGeminiNlpParsing = false
+                                                                        }
+                                                                    } else {
+                                                                        val locResults = runLocalNlpParsing(lassoSelectedLines.toList())
+                                                                        withContext(Dispatchers.Main) {
+                                                                            val freshMap = mappedNutrients.toMutableMap()
+                                                                            locResults.forEach { (k, v) ->
+                                                                                freshMap[k] = v
+                                                                            }
+                                                                            mappedNutrients = freshMap
+                                                                            nlpParseMessage = "Gemini code failover: mapped ${locResults.size} items."
+                                                                            isGeminiNlpParsing = false
+                                                                        }
+                                                                    }
+                                                                } catch (e: Exception) {
+                                                                    val locResults = runLocalNlpParsing(lassoSelectedLines.toList())
+                                                                    withContext(Dispatchers.Main) {
+                                                                        val freshMap = mappedNutrients.toMutableMap()
+                                                                        locResults.forEach { (k, v) ->
+                                                                            freshMap[k] = v
+                                                                        }
+                                                                        mappedNutrients = freshMap
+                                                                        nlpParseMessage = "Network fallback: resolved ${locResults.size} items locally."
+                                                                        isGeminiNlpParsing = false
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                enabled = lassoSelectedLines.isNotEmpty() && !isGeminiNlpParsing,
+                                                modifier = Modifier.weight(1.5f),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.primary,
+                                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                                ),
+                                                shape = RoundedCornerShape(10.dp)
+                                            ) {
+                                                if (isGeminiNlpParsing) {
+                                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                } else {
+                                                    Icon(imageVector = Icons.Default.CheckCircle, contentDescription = "Gemini Parse", modifier = Modifier.size(16.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                }
+                                                Text("✨ Run Gemini NLP Parse", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                            }
+
+                                            // Clear lasso points & bounds
+                                            OutlinedButton(
+                                                onClick = {
+                                                    lassoPoints = emptyList()
+                                                    lassoSelectedLines = emptySet()
+                                                    nlpParseMessage = null
+                                                },
+                                                enabled = lassoPoints.isNotEmpty() || lassoSelectedLines.isNotEmpty() || nlpParseMessage != null,
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(10.dp)
+                                            ) {
+                                                Text("❌ Reset Circle", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                            }
+                                        }
+
+                                        // Status notification log
+                                        nlpParseMessage?.let { msg ->
+                                            Spacer(modifier = Modifier.height(10.dp))
+                                            Surface(
+                                                color = if (msg.contains("error", true)) MaterialTheme.colorScheme.errorContainer else Color(0xFF22C55E).copy(alpha = 0.08f),
+                                                border = BorderStroke(1.dp, if (msg.contains("error", true)) MaterialTheme.colorScheme.error else Color(0xFF22C55E)),
+                                                shape = RoundedCornerShape(8.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = msg,
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                    color = if (msg.contains("error", true)) MaterialTheme.colorScheme.onErrorContainer else Color(0xFF15803D),
+                                                    modifier = Modifier.padding(10.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // --- WEB & DEVISE INTERACTIVE TOUCH-TO-MAP WORKSPACE ---
+                                Card(
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Detected Label Lines (${detectedLines.size})",
+                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                            if (detectedLines.isNotEmpty()) {
+                                                TextButton(
+                                                    onClick = {
+                                                        detectedLines = emptySet()
+                                                        mappedNutrients = emptyMap()
+                                                    }
+                                                ) {
+                                                    Text("Clear All", style = MaterialTheme.typography.labelSmall)
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+
+                                        if (detectedLines.isEmpty()) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 12.dp)
+                                                    .border(
+                                                        1.dp,
+                                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
+                                                        RoundedCornerShape(8.dp)
+                                                    ),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "No lines detected yet. Point camera at supplement label, choose a Preset above, or paste raw text.",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    textAlign = TextAlign.Center,
+                                                    modifier = Modifier.padding(12.dp)
+                                                )
+                                            }
+                                        } else {
+                                            Text(
+                                                text = "👉 TAP ANY DETECTED LINE TO MANUALLY MAP OR ADJUST VALUE:",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(bottom = 6.dp)
+                                            )
+
+                                            Column(
+                                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(max = 140.dp)
+                                                    .verticalScroll(rememberScrollState())
+                                            ) {
+                                                detectedLines.forEach { rawLine ->
+                                                    val autoParsed = parseNutrientFromLine(rawLine)
+                                                    val mappedKey = autoParsed?.first
+                                                    val isLineMapped = mappedKey != null && mappedNutrients.containsKey(mappedKey)
+                                                    val currentAssignedValue = if (mappedKey != null) mappedNutrients[mappedKey] ?: autoParsed.second else null
+
+                                                     Surface(
+                                                         onClick = {
+                                                             showMappingDialogForLine = rawLine
+                                                             selectedMappedNutrientKey = mappedKey ?: "vitamin_c"
+                                                             selectedMappedNutrientValueStr = (currentAssignedValue ?: autoParsed?.second ?: 0.0).toString()
+                                                         },
+                                                         color = if (isLineMapped) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f) else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                                                         shape = RoundedCornerShape(8.dp),
+                                                         modifier = Modifier.fillMaxWidth(),
+                                                         border = BorderStroke(0.5.dp, if (isLineMapped) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                                                     ) {
+                                                         Row(
+                                                             modifier = Modifier
+                                                                 .fillMaxWidth()
+                                                                 .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                             verticalAlignment = Alignment.CenterVertically,
+                                                             horizontalArrangement = Arrangement.SpaceBetween
+                                                         ) {
+                                                             Column(modifier = Modifier.weight(1f)) {
+                                                                 Text(
+                                                                     text = rawLine,
+                                                                     style = MaterialTheme.typography.bodySmall,
+                                                                     maxLines = 1,
+                                                                     overflow = TextOverflow.Ellipsis
+                                                                 )
+                                                                 if (isLineMapped && mappedKey != null) {
+                                                                     val friendlyName = nutrientDropdownOptions.find { it.first == mappedKey }?.second ?: mappedKey
+                                                                     Text(
+                                                                         text = "✓ Assigned: $friendlyName -> $currentAssignedValue",
+                                                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                                         color = MaterialTheme.colorScheme.primary
+                                                                     )
+                                                                 } else {
+                                                                     Text(
+                                                                         text = "Tap to map to a specific nutrient manually",
+                                                                         style = MaterialTheme.typography.labelSmall,
+                                                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                                                     )
+                                                                 }
+                                                             }
+
+                                                             Icon(
+                                                                 imageVector = if (isLineMapped) Icons.Default.CheckCircle else Icons.Default.Edit,
+                                                                 contentDescription = "Map icon",
+                                                                 tint = if (isLineMapped) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                                                 modifier = Modifier.size(16.dp)
+                                                             )
+                                                         }
+                                                     }
+                                                 }
+                                             }
+                                         }
+
+                                         if (mappedNutrients.isNotEmpty()) {
+                                             Spacer(modifier = Modifier.height(8.dp))
+                                             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)))
+                                             Spacer(modifier = Modifier.height(6.dp))
+
+                                             Text(
+                                                 text = "Mapped Nutritional Profile Preview (${mappedNutrients.size}):",
+                                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                 color = MaterialTheme.colorScheme.secondary
+                                             )
+
+                                             Row(
+                                                 modifier = Modifier
+                                                     .fillMaxWidth()
+                                                     .horizontalScroll(rememberScrollState()),
+                                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                             ) {
+                                                 mappedNutrients.forEach { (key, value) ->
+                                                     val friendly = nutrientDropdownOptions.find { it.first == key }?.second ?: key
+                                                     Surface(
+                                                         shape = RoundedCornerShape(12.dp),
+                                                         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                                                         modifier = Modifier.clickable {
+                                                             val correspondingLine = detectedLines.firstOrNull {
+                                                                 val parsed = parseNutrientFromLine(it)
+                                                                 parsed?.first == key
+                                                             } ?: "Manual assignment"
+                                                             showMappingDialogForLine = correspondingLine
+                                                             selectedMappedNutrientKey = key
+                                                             selectedMappedNutrientValueStr = value.toString()
+                                                         }
+                                                     ) {
+                                                         Row(
+                                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                             verticalAlignment = Alignment.CenterVertically
+                                                         ) {
+                                                             Text(
+                                                                 text = "$friendly: $value",
+                                                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                                 color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                             )
+                                                         }
+                                                     }
+                                                 }
+                                             }
+                                         }
+
+                                         Spacer(modifier = Modifier.height(10.dp))
+                                         Button(
+                                             onClick = {
+                                                 if (mappedNutrients.isNotEmpty()) {
+                                                     isScannedAlready = true
+                                                     onOcrScanned?.invoke(mappedNutrients)
+                                                 }
+                                             },
+                                             enabled = mappedNutrients.isNotEmpty(),
+                                             shape = RoundedCornerShape(10.dp),
+                                             modifier = Modifier
+                                                 .fillMaxWidth()
+                                                 .height(44.dp)
+                                                 .testTag("ocr_mapper_submit_button")
+                                         ) {
+                                             Icon(imageVector = Icons.Default.CheckCircle, contentDescription = "Submit Map")
+                                             Spacer(modifier = Modifier.width(6.dp))
+                                             Text("Apply and Save (${mappedNutrients.size} Nutrients)")
+                                         }
+                                     }
+                                 }
+                            } else {
+                                // BARCODE PRESETS ROW (horizontal scroll chips)
+                                Text(
+                                    text = "Select Product to Simulate Scan:",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(bottom = 6.dp)
+                                )
+
+                                Row(
                                     modifier = Modifier
-                                        .height(52.dp)
-                                        .testTag("custom_mock_scan_submit_button")
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    val presets = listOf(
+                                        Triple("Greek Yogurt", "041500000251", "Food"),
+                                        Triple("Whey Protein", "885101234567", "Supplement"),
+                                        Triple("Multivitamin", "190111222333", "Supplement"),
+                                        Triple("Magnesium Glycinate", "301234567890", "Supplement"),
+                                        Triple("Organic Oats", "012000000133", "Food"),
+                                        Triple("Matcha Green Tea", "490000004433", "Tea/Food")
+                                    )
+
+                                    presets.forEach { (name, upc, category) ->
+                                        Button(
+                                            onClick = {
+                                                if (!isScannedAlready) {
+                                                    isScannedAlready = true
+                                                    onBarcodeScanned(upc)
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (category == "Supplement") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                                contentColor = if (category == "Supplement") MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                            modifier = Modifier
+                                                .height(34.dp)
+                                                .testTag("mock_scan_preset_$upc")
+                                        ) {
+                                            Text(
+                                                text = "$name ($category)",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // Custom Text QR scanner input
+                                Text(
+                                    text = "Or Scan Custom Text QR Code / Barcode ID:",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 6.dp)
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = customBarcode,
+                                        onValueChange = { customBarcode = it },
+                                        placeholder = { Text("e.g., Vitamin D3, 5000 IU or UPC code") },
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(52.dp)
+                                            .testTag("custom_scan_input_field"),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent
+                                        ),
+                                        textStyle = MaterialTheme.typography.bodyMedium
+                                    )
+
+                                    Button(
+                                        onClick = {
+                                            if (customBarcode.isNotBlank() && !isScannedAlready) {
+                                                isScannedAlready = true
+                                                onBarcodeScanned(customBarcode)
+                                            }
+                                        },
+                                        enabled = customBarcode.isNotBlank(),
+                                        modifier = Modifier
+                                            .height(52.dp)
+                                            .testTag("custom_mock_scan_submit_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "Scan"
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Log")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showMappingDialogForLine != null) {
+            val rawLine = showMappingDialogForLine!!
+            var expandedDropdown by remember { mutableStateOf(false) }
+            
+            Dialog(
+                onDismissRequest = { showMappingDialogForLine = null }
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Map OCR Detected Line",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)))
+                        
+                        Text(
+                            text = "Raw Scanned Text:",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = rawLine,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                        
+                        Text(
+                            text = "Assign Target Nutrient Key (Grouped Tables):",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        val vitaminsList = listOf("vitamin_a", "vitamin_c", "vitamin_d", "vitamin_e", "vitamin_k", "thiamin", "riboflavin", "niacin", "pantothenic_acid", "biotin", "folate", "vitamin_b6", "vitamin_b12", "choline")
+                        val mineralsList = listOf("calcium", "iron", "magnesium", "potassium", "sodium", "zinc", "copper", "manganese", "selenium", "chromium", "molybdenum", "iodine")
+                        val macrosList = listOf("calories", "carbohydrates", "protein", "fat", "fiber")
+
+                        var selectedCategoryTab by remember {
+                            mutableStateOf(
+                                when {
+                                    selectedMappedNutrientKey in mineralsList -> "Minerals"
+                                    selectedMappedNutrientKey in macrosList -> "Macros"
+                                    else -> "Vitamins"
+                                }
+                            )
+                        }
+
+                        // Category segmented tabs
+                        TabRow(
+                            selectedTabIndex = when (selectedCategoryTab) {
+                                "Vitamins" -> 0
+                                "Minerals" -> 1
+                                else -> 2
+                            },
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                        ) {
+                            Tab(
+                                selected = selectedCategoryTab == "Vitamins",
+                                onClick = { selectedCategoryTab = "Vitamins" },
+                                text = { Text("💊 Vitamins", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)) }
+                            )
+                            Tab(
+                                selected = selectedCategoryTab == "Minerals",
+                                onClick = { selectedCategoryTab = "Minerals" },
+                                text = { Text("🪨 Minerals", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)) }
+                            )
+                            Tab(
+                                selected = selectedCategoryTab == "Macros",
+                                onClick = { selectedCategoryTab = "Macros" },
+                                text = { Text("⚡ Macros", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)) }
+                            )
+                        }
+
+                        // Selected nutrient chips flow row
+                        val visibleKeys = when (selectedCategoryTab) {
+                            "Vitamins" -> vitaminsList
+                            "Minerals" -> mineralsList
+                            else -> macrosList
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 180.dp)
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)), RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    visibleKeys.forEach { key ->
+                                        val labelPair = nutrientDropdownOptions.find { it.first == key }
+                                        val labelName = labelPair?.second?.substringBefore(" (") ?: key
+                                        val isSelected = selectedMappedNutrientKey == key
+
+                                        Surface(
+                                            onClick = { selectedMappedNutrientKey = key },
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                            contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                            shape = RoundedCornerShape(16.dp),
+                                            border = BorderStroke(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                                            modifier = Modifier.height(28.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                if (isSelected) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.CheckCircle,
+                                                        contentDescription = "Selected",
+                                                        modifier = Modifier.size(12.dp),
+                                                        tint = MaterialTheme.colorScheme.onPrimary
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                }
+                                                Text(
+                                                    text = labelName,
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Selected nutrient visual confirmation
+                        val selectedLabelConfirm = nutrientDropdownOptions.find { it.first == selectedMappedNutrientKey }?.second ?: "None Chosen"
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = "Selection details",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Selected: $selectedLabelConfirm",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                        
+                        Text(
+                            text = "Assign Measured Amount (Value):",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        
+                        OutlinedTextField(
+                            value = selectedMappedNutrientValueStr,
+                            onValueChange = { selectedMappedNutrientValueStr = it },
+                            placeholder = { Text("0.0") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Decimal
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                            )
+                        )
+                        
+                        Spacer(modifier = Modifier.height(4.dp))
+                        
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // 1. UNMAP (Clear Mapping and remember ignore state)
+                                OutlinedButton(
+                                    onClick = {
+                                        if (selectedMappedNutrientKey.isNotBlank()) {
+                                            mappedNutrients = mappedNutrients.toMutableMap().apply {
+                                                remove(selectedMappedNutrientKey)
+                                            }
+                                            userUnmappedKeys = userUnmappedKeys + selectedMappedNutrientKey
+                                        }
+                                        showMappingDialogForLine = null
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("Unmap (Clear)")
+                                }
+
+                                // 2. DELETE (Completely remove the scan line from list)
+                                OutlinedButton(
+                                    onClick = {
+                                        detectedLines = detectedLines - rawLine
+                                        if (selectedMappedNutrientKey.isNotBlank()) {
+                                            mappedNutrients = mappedNutrients.toMutableMap().apply {
+                                                remove(selectedMappedNutrientKey)
+                                            }
+                                        }
+                                        showMappingDialogForLine = null
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    ),
+                                    modifier = Modifier.weight(1.5f),
+                                    shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = "Scan"
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete Line",
+                                        modifier = Modifier.size(14.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Log")
+                                    Text("Delete Line")
+                                }
+                            }
+
+                            // 3. ASSIGN MAPPING (Save)
+                            Button(
+                                onClick = {
+                                    val amount = selectedMappedNutrientValueStr.toDoubleOrNull() ?: 0.0
+                                    if (selectedMappedNutrientKey.isNotBlank()) {
+                                        userUnmappedKeys = userUnmappedKeys - selectedMappedNutrientKey
+                                        mappedNutrients = mappedNutrients.toMutableMap().apply {
+                                            put(selectedMappedNutrientKey, amount)
+                                        }
+                                    }
+                                    showMappingDialogForLine = null
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Assign",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Assign & Save Mapping")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Global Parser Function for OCR Live frames & Paste simulation bounds
+fun parseNutrientFromLine(line: String): Pair<String, Double>? {
+    val lower = line.lowercase()
+    
+    // Find matched Nutrient Key
+    var matchedKey: String? = null
+    if (lower.contains("vitamin b12") || lower.contains("b12") || lower.contains("cobalamin") || lower.contains("methylcobalamin")) {
+        matchedKey = "vitamin_b12"
+    } else if (lower.contains("vitamin b6") || lower.contains("b6") || lower.contains("pyridoxine")) {
+        matchedKey = "vitamin_b6"
+    } else if (lower.contains("vitamin a") || (lower.contains("vit") && lower.contains(" a")) || lower.contains("retinol")) {
+        matchedKey = "vitamin_a"
+    } else if (lower.contains("vitamin c") || (lower.contains("vit") && lower.contains(" c")) || lower.contains("ascorbic")) {
+        matchedKey = "vitamin_c"
+    } else if (lower.contains("vitamin d") || (lower.contains("vit") && lower.contains(" d")) || lower.contains("cholecalciferol") || lower.contains("d3")) {
+        matchedKey = "vitamin_d"
+    } else if (lower.contains("vitamin e") || (lower.contains("vit") && lower.contains(" e")) || lower.contains("tocopherol")) {
+        matchedKey = "vitamin_e"
+    } else if (lower.contains("vitamin k") || (lower.contains("vit") && lower.contains(" k")) || lower.contains("menaquinone")) {
+        matchedKey = "vitamin_k"
+    } else if (lower.contains("thiamin") || lower.contains("b1") || lower.contains("thiamine")) {
+        matchedKey = "thiamin"
+    } else if (lower.contains("riboflavin") || lower.contains("b2")) {
+        matchedKey = "riboflavin"
+    } else if (lower.contains("niacin") || lower.contains("b3")) {
+        matchedKey = "niacin"
+    } else if (lower.contains("pantothenic") || lower.contains("b5")) {
+        matchedKey = "pantothenic_acid"
+    } else if (lower.contains("biotin") || lower.contains("b7")) {
+        matchedKey = "biotin"
+    } else if (lower.contains("folate") || lower.contains("folic") || lower.contains("b9")) {
+        matchedKey = "folate"
+    } else if (lower.contains("choline")) {
+        matchedKey = "choline"
+    } else if (lower.contains("calcium")) {
+        matchedKey = "calcium"
+    } else if (lower.contains("iron")) {
+        matchedKey = "iron"
+    } else if (lower.contains("magnesium")) {
+        matchedKey = "magnesium"
+    } else if (lower.contains("potassium")) {
+        matchedKey = "potassium"
+    } else if (lower.contains("sodium")) {
+        matchedKey = "sodium"
+    } else if (lower.contains("zinc")) {
+        matchedKey = "zinc"
+    } else if (lower.contains("copper")) {
+        matchedKey = "copper"
+    } else if (lower.contains("manganese")) {
+        matchedKey = "manganese"
+    } else if (lower.contains("selenium")) {
+        matchedKey = "selenium"
+    } else if (lower.contains("chromium")) {
+        matchedKey = "chromium"
+    } else if (lower.contains("molybdenum")) {
+        matchedKey = "molybdenum"
+    } else if (lower.contains("iodine")) {
+        matchedKey = "iodine"
+    } else if (lower.contains("carbohydrate")) {
+        matchedKey = "carbohydrates"
+    } else if (lower.contains("protein")) {
+        matchedKey = "protein"
+    } else if (lower.contains("calories")) {
+        matchedKey = "calories"
+    } else if (lower.contains("fat")) {
+        matchedKey = "fat"
+    } else if (lower.contains("fiber")) {
+        matchedKey = "fiber"
+    }
+    
+    if (matchedKey == null) return null
+    
+    // Clean percentages to prevent extracting percentage values (e.g., "120%" or "4,167%")
+    val cleanLine = lower
+        .replace("""\d+(?:,\d+)?%\s*(dv|daily value|)?|(?:\bper cent\b|\bpercent\b)""".toRegex(), "")
+        .replace("""\((?:dv|daily value|)\s*(?:100|90|80|70|60|50|40|30|20|10|\d+(?:,\d+)?)%\s*\)""".toRegex(), "")
+        .replace("""\d+(?:,\d+)?\s*%""".toRegex(), "")
+        
+    // Look for numbers followed by standard dosage units
+    val regexMetric = """(\d+(?:\.\d+)?)\s*(mg|mcg|g|ug|ml|kcal|iu)\b""".toRegex()
+    val match = regexMetric.find(cleanLine)
+    if (match != null) {
+        val valueStr = match.groupValues[1]
+        val unitStr = match.groupValues[2]
+        var value = valueStr.toDoubleOrNull() ?: 0.0
+        if (matchedKey == "vitamin_d" && unitStr.lowercase() == "iu") {
+            value /= 40.0 // convert IU D3 to mcg
+        }
+        return Pair(matchedKey, value)
+    }
+
+    // Fallback scanner to search for first standalone decimal/integer
+    val fallbackRegex = """\b(\d+(?:\.\d+)?)\b""".toRegex()
+    val fallbackMatch = fallbackRegex.find(cleanLine)
+    if (fallbackMatch != null) {
+        val value = fallbackMatch.groupValues[1].toDoubleOrNull() ?: 0.0
+        return Pair(matchedKey, value)
+    }
+    
+    return null
+}
+
+@Composable
+fun RdaProfilerDialog(
+    viewModel: NutritionViewModel,
+    onDismiss: () -> Unit
+) {
+    val currentAge by viewModel.profileAge.collectAsState()
+    val currentWeight by viewModel.profileWeight.collectAsState()
+    val currentActivity by viewModel.profileActivity.collectAsState()
+    val currentSex by viewModel.profileSex.collectAsState()
+
+    var ageInput by remember(currentAge) { mutableStateOf(currentAge.toString()) }
+    var weightInput by remember(currentWeight) { mutableStateOf(currentWeight.toString()) }
+    var selectedActivity by remember(currentActivity) { mutableStateOf(currentActivity) }
+    var selectedSex by remember(currentSex) { mutableStateOf(currentSex) }
+
+    val activityLevels = listOf(
+        "Sedentary" to "Little or no exercise daily",
+        "Lightly Active" to "Light exercise/sports 1-3 days/week",
+        "Moderately Active" to "Moderate exercise 3-5 days/week",
+        "Very Active" to "Hard exercise/sports 6-7 days/week",
+        "Super Active" to "Heavy physical job or intense training"
+    )
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Header
+                Column {
+                    Text(
+                        text = "Physiological RDA Profiler",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Tailor standard RDAs based on age, exercise, and metabolic needs.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Divider
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                )
+
+                // Biological Sex Select Choice
+                Column {
+                    Text(
+                        text = "Biological Sex",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        listOf("Female", "Male").forEach { sex ->
+                            val isSelected = selectedSex == sex
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                    )
+                                    .border(
+                                        width = if (isSelected) 1.5.dp else 1.dp,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable {
+                                        selectedSex = sex
+                                    }
+                                    .padding(vertical = 12.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = sex,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Age input field
+                Column {
+                    Text(
+                        text = "Age",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    OutlinedTextField(
+                        value = ageInput,
+                        onValueChange = { input ->
+                            ageInput = input.take(3).filter { c -> c.isDigit() }
+                        },
+                        placeholder = { Text("e.g. 30") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth().testTag("profiler_age_input"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                        )
+                    )
+                }
+
+                // Weight input field
+                Column {
+                    Text(
+                        text = "Weight (kg)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    OutlinedTextField(
+                        value = weightInput,
+                        onValueChange = { input ->
+                            if (input.all { it.isDigit() || it == '.' } && input.count { it == '.' } <= 1) {
+                                weightInput = input.take(6)
+                            }
+                        },
+                        placeholder = { Text("e.g. 70.0") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth().testTag("profiler_weight_input"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                        )
+                    )
+                }
+
+                // Activity Factor picker list
+                Column {
+                    Text(
+                        text = "Activity Level",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        activityLevels.forEach { (level, desc) ->
+                            val isSelected = selectedActivity == level
+                            Card(
+                                onClick = {
+                                    selectedActivity = level
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                                    else MaterialTheme.colorScheme.surface
+                                ),
+                                border = BorderStroke(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                ),
+                                modifier = Modifier.fillMaxWidth().testTag("activity_level_$level")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                                        .fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .clip(CircleShape)
+                                            .border(
+                                                width = 1.5.dp,
+                                                color = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                                shape = CircleShape
+                                              )
+                                            .background(
+                                                color = if (isSelected) MaterialTheme.colorScheme.secondary else Color.Transparent,
+                                                shape = CircleShape
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = level,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = desc,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Divider
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                )
+
+                // Actions Button Column (Stacked for robust spacing and no text warping)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Button(
+                        onClick = {
+                            val age = ageInput.toIntOrNull() ?: 30
+                            val weight = weightInput.toDoubleOrNull() ?: 70.0
+                            viewModel.applyRdaProfile(age, weight, selectedActivity, selectedSex)
+                            onDismiss()
+                        },
+                        enabled = ageInput.isNotBlank() && (ageInput.toIntOrNull() ?: 0) > 0 &&
+                                  weightInput.isNotBlank() && (weightInput.toDoubleOrNull() ?: 0.0) > 0.0,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("profiler_apply_button")
+                    ) {
+                        Text("Commit & Save Changes", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                    }
+
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("profiler_cancel_button")
+                    ) {
+                        Text("Cancel", style = MaterialTheme.typography.labelLarge)
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    TextButton(
+                        onClick = {
+                            viewModel.resetRdaToDefaults()
+                            ageInput = "30"
+                            weightInput = "70.0"
+                            selectedActivity = "Lightly Active"
+                            selectedSex = "Female"
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("profiler_reset_button")
+                    ) {
+                        Text("Reset Standards to System Defaults", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RdaConfigPanelTab(viewModel: NutritionViewModel) {
+    val dailyNutrients by viewModel.dailyNutrients.collectAsState()
+    val customRdaOverrides by viewModel.customRdaOverrides.collectAsState()
+    val currentAge by viewModel.profileAge.collectAsState()
+    val currentWeight by viewModel.profileWeight.collectAsState()
+    val currentActivity by viewModel.profileActivity.collectAsState()
+    val currentSex by viewModel.profileSex.collectAsState()
+    val currentGoal by viewModel.profileGoal.collectAsState()
+
+    var ageInput by remember(currentAge) { mutableStateOf(currentAge.toString()) }
+    var weightInput by remember(currentWeight) { mutableStateOf(currentWeight.toString()) }
+    var selectedActivity by remember(currentActivity) { mutableStateOf(currentActivity) }
+    var selectedSex by remember(currentSex) { mutableStateOf(currentSex) }
+    var selectedGoal by remember(currentGoal) { mutableStateOf(currentGoal) }
+
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedGroup by remember { mutableStateOf<NutrientGroup?>(null) }
+
+    // Map of local active string states
+    val editedTargets = remember { mutableStateMapOf<String, String>() }
+
+    LaunchedEffect(dailyNutrients, customRdaOverrides) {
+        dailyNutrients.forEach { status ->
+            val key = status.definition.key
+            val currentTarget = customRdaOverrides[key] ?: status.definition.rda
+            if (!editedTargets.containsKey(key) || editedTargets[key] != currentTarget.toInt().toString()) {
+                editedTargets[key] = currentTarget.toInt().toString()
+            }
+        }
+    }
+
+    val activityLevels = listOf(
+        "Sedentary" to "Little or no exercise daily",
+        "Lightly Active" to "Light exercise/sports 1-3 days/week",
+        "Moderately Active" to "Moderate exercise 3-5 days/week",
+        "Very Active" to "Hard exercise/sports 6-7 days/week",
+        "Super Active" to "Heavy physical job or intense training"
+    )
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Section 1: Biological Profile Config Card
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth().testTag("profile_calculator_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "1. Biological Profile Calculator",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Initialize baseline RDA targets for all 41 essential nutrients scientifically calculated for your physical profile details.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Sex Choice Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Sex:",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.width(60.dp)
+                        )
+                        listOf("Female", "Male").forEach { sex ->
+                            val isSelected = selectedSex == sex
+                            Button(
+                                onClick = { selectedSex = sex },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                ),
+                                modifier = Modifier.weight(1f).testTag("profile_sex_$sex")
+                            ) {
+                                Text(
+                                    text = sex,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+                    }
+
+                    // Age Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Age:",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.width(60.dp)
+                        )
+                        OutlinedTextField(
+                            value = ageInput,
+                            onValueChange = { input ->
+                                ageInput = input.take(3).filter { it.isDigit() }
+                            },
+                            placeholder = { Text("e.g. 30") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f).testTag("profile_age_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                            )
+                        )
+                    }
+
+                    // Weight Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Weight:",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.width(60.dp)
+                        )
+                        OutlinedTextField(
+                            value = weightInput,
+                            onValueChange = { input ->
+                                if (input.all { it.isDigit() || it == '.' } && input.count { it == '.' } <= 1) {
+                                    weightInput = input.take(6)
+                                }
+                            },
+                            placeholder = { Text("e.g. 70.0") },
+                            singleLine = true,
+                            suffix = { Text("kg") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f).testTag("profile_weight_input"),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                            )
+                        )
+                    }
+
+                    // Activity Level Row (Scrolling chips for clean, scrollable horizontal layout)
+                    Column {
+                        Text(
+                            text = "Activity Level:",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            activityLevels.forEach { (level, desc) ->
+                                val isSelected = selectedActivity == level
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                        )
+                                        .border(
+                                            width = if (isSelected) 1.5.dp else 1.dp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { selectedActivity = level }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        .testTag("profile_activity_$level")
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = level,
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = desc,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Fitness Goal Row (Scrolling chips similar to Activity level)
+                    Column {
+                        Text(
+                            text = "Fitness & Dietary Goal:",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                        val fitnessGoals = listOf(
+                            "Balanced / Maintenance" to "Optimize general health, weight, and vitality",
+                            "Weight Loss / Fat Burn / Cutting" to "Slight calorie deficit and lean protein emphasis",
+                            "Muscle Gain / Bulking" to "Calorie surplus and high protein for building muscle",
+                            "Athletic Performance" to "Excellent carbohydrate levels and superior hydration",
+                            "Low Carb / Keto" to "High fats, moderate protein, very restricted carbs"
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            fitnessGoals.forEach { (level, desc) ->
+                                val isSelected = selectedGoal == level
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                        )
+                                        .border(
+                                            width = if (isSelected) 1.5.dp else 1.dp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { selectedGoal = level }
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        .testTag("profile_goal_${level.replace(" ", "_").replace("/", "_")}")
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = level,
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = desc,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Calculate Button
+                    Button(
+                        onClick = {
+                            val age = ageInput.toIntOrNull() ?: 30
+                            val weight = weightInput.toDoubleOrNull() ?: 70.0
+                            viewModel.applyRdaProfile(age, weight, selectedActivity, selectedSex, selectedGoal)
+                        },
+                        enabled = ageInput.isNotBlank() && (ageInput.toIntOrNull() ?: 0) > 0 &&
+                                  weightInput.isNotBlank() && (weightInput.toDoubleOrNull() ?: 0.0) > 0.0,
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("profile_calculate_button")
+                    ) {
+                        Text("Calculate & Fit All 41 Goals", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                    }
+                }
+            }
+        }
+
+        // Section 2: Header for Manual Fine-tuning
+        item {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "2. Customize Individual RDA Goals (41 Nutrients)",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Search and adjust target allowances. Values automatically save as you type or click.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // Search field
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    label = { Text("Search 41 tracked nutrients...") },
+                    modifier = Modifier.fillMaxWidth().testTag("config_search_input"),
+                    singleLine = true,
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear")
+                            }
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                    )
+                )
+
+                // Filter Category Chips
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val groupsList = listOf(null) + NutrientGroup.values().toList()
+                    groupsList.forEach { grp ->
+                        val label = grp?.displayName ?: "All"
+                        val isSelected = selectedGroup == grp
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                .clickable { selectedGroup = grp }
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .testTag("category_chip_${label.replace(" ", "_")}")
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section 3: Nutrient List Items with Fine-tuning Controls
+        val filteredList = dailyNutrients.filter { status ->
+            val matchQuery = status.definition.name.contains(searchQuery, ignoreCase = true)
+            val matchGroup = selectedGroup == null || status.definition.group == selectedGroup
+            matchQuery && matchGroup
+        }
+
+        if (filteredList.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No nutrients match your search",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            items(filteredList, key = { it.definition.key }) { status ->
+                val def = status.definition
+                val key = def.key
+                val textValueVal = editedTargets[key] ?: def.rda.toInt().toString()
+                val hasCustomOverride = customRdaOverrides.containsKey(key)
+
+                // category badge colors
+                val categoryColor = when (def.group) {
+                    NutrientGroup.MACROS -> Color(0xFF6366F1)
+                    NutrientGroup.LIPIDS -> Color(0xFFF59E0B)
+                    NutrientGroup.VITAMINS -> Color(0xFF10B981)
+                    NutrientGroup.MINERALS -> Color(0xFF06B6D4)
+                    NutrientGroup.OTHERS -> Color(0xFFEC4899)
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().testTag("nutrient_config_card_$key"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (hasCustomOverride) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                        else MaterialTheme.colorScheme.surface
+                    ),
+                    border = BorderStroke(
+                        width = if (hasCustomOverride) 1.5.dp else 1.dp,
+                        color = if (hasCustomOverride) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp).fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // Col 1: Details
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = def.name,
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 1
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "(${def.unit})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(categoryColor)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = def.group.displayName,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                        color = Color.White
+                                    )
+                                }
+                                if (hasCustomOverride) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "Custom",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Col 2: Edit Box & Buttons
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            // Step increment mapping based on nutrient type
+                            val step = when (key) {
+                                "calories" -> 50.0
+                                "carbohydrates", "protein", "fat" -> 5.0
+                                "water" -> 100.0
+                                "saturated_fat", "trans_fat", "monounsaturated_fat", "polyunsaturated_fat", "omega6", "cholesterol", "fiber" -> 1.0
+                                "omega3" -> 0.1
+                                "vitamin_a", "vitamin_c", "calcium", "potassium", "sodium", "phosphorus", "magnesium", "choline" -> 10.0
+                                "vitamin_d", "vitamin_e", "vitamin_k", "zinc", "manganese", "selenium", "iodine", "sugars" -> 1.0
+                                else -> 0.1
+                            }
+
+                            // Decrease button
+                            IconButton(
+                                onClick = {
+                                    val current = textValueVal.toDoubleOrNull() ?: def.rda
+                                    val newVal = (current - step).coerceAtLeast(1.0)
+                                    editedTargets[key] = newVal.toInt().toString()
+                                    viewModel.updateCustomRda(key, newVal)
+                                },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                                    .testTag("btn_dec_$key")
+                            ) {
+                                Text("-", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                            }
+
+                            // Editable numerical field
+                            OutlinedTextField(
+                                value = textValueVal,
+                                onValueChange = { newVal ->
+                                    val filtered = newVal.filter { it.isDigit() }
+                                    editedTargets[key] = filtered
+                                    val dVal = filtered.toDoubleOrNull()
+                                    if (dVal != null && dVal > 0) {
+                                        viewModel.updateCustomRda(key, dVal)
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
+                                modifier = Modifier
+                                    .width(76.dp)
+                                    .height(48.dp)
+                                    .testTag("input_$key"),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                )
+                            )
+
+                            // Increase button
+                            IconButton(
+                                onClick = {
+                                    val current = textValueVal.toDoubleOrNull() ?: def.rda
+                                    val newVal = current + step
+                                    editedTargets[key] = newVal.toInt().toString()
+                                    viewModel.updateCustomRda(key, newVal)
+                                },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                                    .testTag("btn_inc_$key")
+                            ) {
+                                Text("+", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section 4: Diagnostics Resets
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth().testTag("reset_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Reset Operations",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Revert customized modifications back to reference configurations or baseline physiological values.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Button(
+                        onClick = {
+                            viewModel.resetRdaToDefaults()
+                            ageInput = "30"
+                            selectedActivity = "Lightly Active"
+                            selectedSex = "Female"
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("global_reset_button")
+                    ) {
+                        Text("Reset All 41 Goals to Reference Standards", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun RecentHistoryTab(viewModel: NutritionViewModel) {
+    val allEntries by viewModel.allLogEntries.collectAsState()
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedMealFilter by remember { mutableStateOf("All") }
+    val mealFilters = listOf("All", "Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
+
+    var editingEntry by remember { mutableStateOf<FoodLogEntry?>(null) }
+    var entryToDelete by remember { mutableStateOf<FoodLogEntry?>(null) }
+    var selectedLogForBreakdown by remember { mutableStateOf<FoodLogEntry?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Recent Food Logs",
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Text(
+            text = "Browse and manage your historical nutrition history. Click any food card to reveal its full 41-nutrient breakdown.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        // Search bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            label = { Text("Search Food Logs") },
+            placeholder = { Text("Search by name (e.g., egg, milk)...") },
+            textStyle = MaterialTheme.typography.bodyMedium,
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .testTag("history_search_input"),
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search"
+                )
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(
+                        onClick = { searchQuery = "" },
+                        modifier = Modifier.testTag("clear_history_search_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Clear search")
+                    }
+                }
+            }
+        )
+
+        // Filter chips inside horizontal scrollable row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            mealFilters.forEach { mealType ->
+                val isSelected = selectedMealFilter == mealType
+                Card(
+                    modifier = Modifier
+                        .clickable { selectedMealFilter = mealType }
+                        .testTag("filter_chip_$mealType"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                    ),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        text = mealType,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal),
+                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        val filteredEntries = remember(allEntries, searchQuery, selectedMealFilter) {
+            allEntries.filter { entry ->
+                val matchesSearch = entry.foodName.contains(searchQuery, ignoreCase = true)
+                val matchesMeal = selectedMealFilter == "All" || entry.mealType.equals(selectedMealFilter, ignoreCase = true)
+                matchesSearch && matchesMeal
+            }
+        }
+
+        val groupedEntries = remember(filteredEntries) {
+            filteredEntries.groupBy { it.date }
+        }
+
+        if (filteredEntries.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.List,
+                        contentDescription = "No Entries Found",
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = if (searchQuery.isNotEmpty() || selectedMealFilter != "All") "No matching logs found" else "Your food collection is empty",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (searchQuery.isNotEmpty() || selectedMealFilter != "All") "Try adjusting your search criteria of category or keywords." else "Logs you add will appear here historically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                groupedEntries.forEach { (dateStr, entriesList) ->
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = formatDateLabel(dateStr),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "${entriesList.size} items",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    items(entriesList, key = { it.id }) { entry ->
+                        RecentFoodLogCard(
+                            entry = entry,
+                            onEditClick = { editingEntry = entry },
+                            onDeleteClick = { entryToDelete = entry },
+                            onCardClick = { selectedLogForBreakdown = entry }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    editingEntry?.let { entry ->
+        EditFoodDialog(
+            entry = entry,
+            onDismiss = { editingEntry = null },
+            onConfirmManual = { updated ->
+                viewModel.updateFoodLogEntry(updated)
+                editingEntry = null
+            },
+            onConfirmReanalyze = { id, text, meal, date ->
+                viewModel.reanalyzeAndReplaceEntry(id, text, meal, date)
+                editingEntry = null
+            }
+        )
+    }
+
+    entryToDelete?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { entryToDelete = null },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Warning",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        text = "Delete Food Log Entry",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            },
+            text = {
+                Text("Are you sure you want to delete \"${entry.foodName}\" for ${entry.mealType}? This action will permanently remove this item from your daily journal and reduce your nutrient levels accordingly.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteLog(entry)
+                        entryToDelete = null
+                    },
+                    modifier = Modifier.testTag("confirm_delete_dialog_button"),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { entryToDelete = null },
+                    modifier = Modifier.testTag("cancel_delete_dialog_button")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    selectedLogForBreakdown?.let { entry ->
+        FoodNutrientBreakdownBottomSheet(
+            entry = entry,
+            viewModel = viewModel,
+            onDismiss = { selectedLogForBreakdown = null }
+        )
+    }
+}
+
+fun formatDateLabel(dateStr: String): String {
+    return try {
+        val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val date = format.parse(dateStr)
+        if (date != null) {
+            val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
+            val cal = Calendar.getInstance()
+            cal.add(Calendar.DATE, -1)
+            val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
+
+            when (dateStr) {
+                today -> "Today (${SimpleDateFormat("MMMM d", Locale.US).format(date)})"
+                yesterday -> "Yesterday (${SimpleDateFormat("MMMM d", Locale.US).format(date)})"
+                else -> SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.US).format(date)
+            }
+        } else {
+            dateStr
+        }
+    } catch (e: Exception) {
+        dateStr
+    }
+}
+
+@Composable
+fun RecentFoodLogCard(
+    entry: FoodLogEntry,
+    onEditClick: () -> Unit,
+    onDeleteClick: () -> Unit,
+    onCardClick: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("recent_entry_card_${entry.id}")
+            .clickable { onCardClick() },
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = entry.foodName,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f, fill = false),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = when (entry.mealType.lowercase()) {
+                                    "breakfast" -> Color(0xFFEBF8FF)
+                                    "lunch" -> Color(0xFFFEFCBF)
+                                    "dinner" -> Color(0xFFF0FFF4)
+                                    "snack" -> Color(0xFFFAF5FF)
+                                    else -> Color(0xFFFFF5F5)
+                                }
+                            ),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = entry.mealType,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = when (entry.mealType.lowercase()) {
+                                    "breakfast" -> Color(0xFF2A4365)
+                                    "lunch" -> Color(0xFF744210)
+                                    "dinner" -> Color(0xFF22543D)
+                                    "snack" -> Color(0xFF44337A)
+                                    else -> Color(0xFF742A2A)
+                                }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Portion: ${if (entry.quantity % 1.0 == 0.0) entry.quantity.toInt().toString() else String.format(Locale.US, "%.1f", entry.quantity)} ${entry.unit}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${((entry.nutrients["calories"] ?: 0.0) * entry.quantity).toInt()} kcal",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
+                            .border(1.2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                            .clickable { onEditClick() }
+                            .testTag("edit_food_button_${entry.id}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit entry",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f))
+                            .border(1.2.dp, MaterialTheme.colorScheme.error, CircleShape)
+                            .clickable { onDeleteClick() }
+                            .testTag("delete_food_button_${entry.id}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete entry",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = expanded,
+                enter = fadeIn() + slideInVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column(modifier = Modifier.padding(top = 8.dp)) {
+                    Text(
+                        "Major Nutrients Breakdowns:",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    NutrientMiniGrid(entry = entry)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RdaBiologicalSettingsDialog(
+    viewModel: NutritionViewModel,
+    onDismiss: () -> Unit
+) {
+    val currentAge by viewModel.profileAge.collectAsState()
+    val currentSex by viewModel.profileSex.collectAsState()
+    val currentWeight by viewModel.profileWeight.collectAsState()
+    val currentActivity by viewModel.profileActivity.collectAsState()
+
+    var ageInput by remember(currentAge) { mutableStateOf(currentAge.toString()) }
+    var selectedSex by remember(currentSex) { mutableStateOf(currentSex) }
+
+    val storedUsdaKey by viewModel.usdaApiKey.collectAsState()
+    val storedNutritionixAppId by viewModel.nutritionixAppId.collectAsState()
+    val storedNutritionixApiKey by viewModel.nutritionixApiKey.collectAsState()
+
+    var usdaKeyInput by remember(storedUsdaKey) { mutableStateOf(storedUsdaKey) }
+    var ixAppIdInput by remember(storedNutritionixAppId) { mutableStateOf(storedNutritionixAppId) }
+    var ixApiKeyInput by remember(storedNutritionixApiKey) { mutableStateOf(storedNutritionixApiKey) }
+
+    var usdaKeyVisible by remember { mutableStateOf(false) }
+    var ixKeyVisible by remember { mutableStateOf(false) }
+
+    // Segmented tab toggle: 0 = Profile, 1 = Nutrient Targets, 2 = API Keys
+    var activeDialogTab by remember { mutableStateOf(0) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+            usePlatformDefaultWidth = false // Allow custom width configuration
+        )
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            tonalElevation = 6.dp,
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Header Row
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "Calibrate Daily Targets",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                // Custom Segmented Chip Picker Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf("Profile", "Custom RDAs", "API Keys").forEachIndexed { idx, label ->
+                        val isSelected = activeDialogTab == idx
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                .clickable { activeDialogTab = idx }
+                                .padding(vertical = 8.dp)
+                                .testTag("settings_tab_button_$idx"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                // Conditionally Render Tab Content
+                when (activeDialogTab) {
+                    0 -> {
+                    // TAB 0: Biological Profile
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Configure your age and biological sex to calibrate standard recommended dietary allowances (RDA) for daily warnings.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // Biological Sex selection chips
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "Biological Sex",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                listOf("Female", "Male").forEach { sex ->
+                                    val isSelected = selectedSex == sex
+                                    Button(
+                                        onClick = { selectedSex = sex },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                            contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                        ),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(44.dp)
+                                            .testTag("settings_sex_$sex")
+                                    ) {
+                                        Text(
+                                            text = sex,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Age Input Field
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "Age",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            OutlinedTextField(
+                                value = ageInput,
+                                onValueChange = { input ->
+                                    ageInput = input.take(3).filter { it.isDigit() }
+                                },
+                                placeholder = { Text("Enter age, e.g. 30") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("settings_age_input"),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                )
+                            )
+                        }
+                    }
+                    }
+                    1 -> {
+                        // TAB 1: Customize 41 RDAs
+                    val dailyNutrients by viewModel.dailyNutrients.collectAsState()
+                    val customRdaOverrides by viewModel.customRdaOverrides.collectAsState()
+                    var nutrientSearchQuery by remember { mutableStateOf("") }
+                    val dialogEditedTargets = remember { mutableStateMapOf<String, String>() }
+
+                    LaunchedEffect(dailyNutrients, customRdaOverrides) {
+                        dailyNutrients.forEach { status ->
+                            val key = status.definition.key
+                            val currentTarget = customRdaOverrides[key] ?: status.definition.rda
+                            if (!dialogEditedTargets.containsKey(key) || dialogEditedTargets[key] != currentTarget.toInt().toString()) {
+                                dialogEditedTargets[key] = currentTarget.toInt().toString()
+                            }
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Search and adjust target allowances for all 41 tracked nutrients. Changes persist in real-time.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // Compact search input inside dialog
+                        OutlinedTextField(
+                            value = nutrientSearchQuery,
+                            onValueChange = { nutrientSearchQuery = it },
+                            placeholder = { Text("Search 41 nutrients...") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("dialog_nutrient_search"),
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = "Search icon", modifier = Modifier.size(18.dp))
+                            },
+                            trailingIcon = {
+                                if (nutrientSearchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { nutrientSearchQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                            )
+                        )
+
+                        val dialogFilteredList = dailyNutrients.filter { status ->
+                            status.definition.name.contains(nutrientSearchQuery, ignoreCase = true)
+                        }
+
+                        // Scrollable target-adjuster widget list
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 280.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+                                .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                        ) {
+                            if (dialogFilteredList.isEmpty()) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "No matching nutrients",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            } else {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .verticalScroll(rememberScrollState())
+                                        .padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    dialogFilteredList.forEach { status ->
+                                        val def = status.definition
+                                        val key = def.key
+                                        val textVal = dialogEditedTargets[key] ?: def.rda.toInt().toString()
+                                        val hasOverride = customRdaOverrides.containsKey(key)
+
+                                        val badgeColor = when (def.group) {
+                                            com.example.data.NutrientGroup.MACROS -> Color(0xFF6366F1)
+                                            com.example.data.NutrientGroup.LIPIDS -> Color(0xFFF59E0B)
+                                            com.example.data.NutrientGroup.VITAMINS -> Color(0xFF10B981)
+                                            com.example.data.NutrientGroup.MINERALS -> Color(0xFF06B6D4)
+                                            com.example.data.NutrientGroup.OTHERS -> Color(0xFFEC4899)
+                                        }
+
+                                        Card(
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = if (hasOverride) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.12f)
+                                                else MaterialTheme.colorScheme.surface
+                                            ),
+                                            border = BorderStroke(
+                                                width = if (hasOverride) 1.2.dp else 1.dp,
+                                                color = if (hasOverride) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                                            ),
+                                            modifier = Modifier.fillMaxWidth().testTag("dialog_nutrient_card_$key")
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(10.dp).fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                // Nutrient details
+                                                Column(modifier = Modifier.weight(1f).padding(end = 4.dp)) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text(
+                                                            text = def.name,
+                                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                                            color = MaterialTheme.colorScheme.onSurface,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(
+                                                            text = "(${def.unit})",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                    Spacer(modifier = Modifier.height(2.dp))
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .clip(RoundedCornerShape(4.dp))
+                                                                .background(badgeColor)
+                                                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = def.group.displayName,
+                                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.sp, fontWeight = FontWeight.Bold),
+                                                                color = Color.White
+                                                            )
+                                                        }
+                                                        if (hasOverride) {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .clip(RoundedCornerShape(4.dp))
+                                                                    .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
+                                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                            ) {
+                                                                Text(
+                                                                    text = "Custom",
+                                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.sp, fontWeight = FontWeight.Bold),
+                                                                    color = MaterialTheme.colorScheme.primary
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Numeric Fine-tuning with buttons
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                ) {
+                                                    val step = when (key) {
+                                                        "calories" -> 50.0
+                                                        "carbohydrates", "protein", "fat" -> 5.0
+                                                        "water" -> 100.0
+                                                        "saturated_fat", "trans_fat", "monounsaturated_fat", "polyunsaturated_fat", "omega6", "cholesterol", "fiber" -> 1.0
+                                                        "omega3" -> 0.1
+                                                        "vitamin_a", "vitamin_c", "calcium", "potassium", "sodium", "phosphorus", "magnesium", "choline" -> 10.0
+                                                        "vitamin_d", "vitamin_e", "vitamin_k", "zinc", "manganese", "selenium", "iodine", "sugars" -> 1.0
+                                                        else -> 0.1
+                                                    }
+
+                                                    // Decrease
+                                                    IconButton(
+                                                        onClick = {
+                                                            val current = textVal.toDoubleOrNull() ?: def.rda
+                                                            val newVal = (current - step).coerceAtLeast(1.0)
+                                                            dialogEditedTargets[key] = newVal.toInt().toString()
+                                                            viewModel.updateCustomRda(key, newVal)
+                                                        },
+                                                        modifier = Modifier
+                                                            .size(28.dp)
+                                                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                                                            .testTag("dialog_btn_dec_$key")
+                                                    ) {
+                                                        Text("-", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                                                    }
+
+                                                    // Edit text
+                                                    OutlinedTextField(
+                                                        value = textVal,
+                                                        onValueChange = { newValStr ->
+                                                            val filtered = newValStr.filter { it.isDigit() }
+                                                            dialogEditedTargets[key] = filtered
+                                                            val dVal = filtered.toDoubleOrNull()
+                                                            if (dVal != null && dVal > 0) {
+                                                                viewModel.updateCustomRda(key, dVal)
+                                                            }
+                                                        },
+                                                        singleLine = true,
+                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                        textStyle = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
+                                                        modifier = Modifier
+                                                            .width(68.dp)
+                                                            .height(52.dp)
+                                                            .testTag("dialog_input_$key"),
+                                                        colors = OutlinedTextFieldDefaults.colors(
+                                                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                                        )
+                                                    )
+
+                                                    // Increase
+                                                    IconButton(
+                                                        onClick = {
+                                                            val current = textVal.toDoubleOrNull() ?: def.rda
+                                                            val newVal = current + step
+                                                            dialogEditedTargets[key] = newVal.toInt().toString()
+                                                            viewModel.updateCustomRda(key, newVal)
+                                                        },
+                                                        modifier = Modifier
+                                                            .size(28.dp)
+                                                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                                                            .testTag("dialog_btn_inc_$key")
+                                                    ) {
+                                                        Text("+", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                                                    }
+
+                                                    if (hasOverride) {
+                                                        IconButton(
+                                                            onClick = {
+                                                                viewModel.updateCustomRda(key, 0.0) // Delete override
+                                                                val stdRdaValue = com.example.data.Nutrients.DEFAULT_DEFINITIONS.find { it.key == key }?.rda ?: def.rda
+                                                                dialogEditedTargets[key] = stdRdaValue.toInt().toString()
+                                                            },
+                                                            modifier = Modifier
+                                                                .size(28.dp)
+                                                                .testTag("dialog_btn_reset_$key")
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Refresh,
+                                                                contentDescription = "Reset to default",
+                                                                tint = MaterialTheme.colorScheme.error,
+                                                                modifier = Modifier.size(16.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    }
+                    2 -> {
+                        // TAB 2: API Integrations
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Your credentials are saved securely in your private device local storage. They are NOT stored in the compiled APK, preventing private key leaks when sharing or distributing your APK.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            )
+
+                            // USDA Key Input
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = "USDA FoodData Central API Key",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                OutlinedTextField(
+                                    value = usdaKeyInput,
+                                    onValueChange = { usdaKeyInput = it },
+                                    placeholder = { Text("e.g. DEMO_KEY or your USDA API Key") },
+                                    singleLine = true,
+                                    visualTransformation = if (usdaKeyVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                                    trailingIcon = {
+                                        IconButton(onClick = { usdaKeyVisible = !usdaKeyVisible }) {
+                                            Text(if (usdaKeyVisible) "Hide" else "Show", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("settings_usda_key_input"),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                    )
+                                )
+                                Text(
+                                    text = "Defaults to public rate-limited DEMO_KEY if left blank.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            // Nutritionix App ID Input
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = "Nutritionix App ID",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                OutlinedTextField(
+                                    value = ixAppIdInput,
+                                    onValueChange = { ixAppIdInput = it },
+                                    placeholder = { Text("Enter Nutritionix App ID") },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("settings_ix_appid_input"),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                    )
+                                )
+                            }
+
+                            // Nutritionix API Key Input
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = "Nutritionix API Key",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                OutlinedTextField(
+                                    value = ixApiKeyInput,
+                                    onValueChange = { ixApiKeyInput = it },
+                                    placeholder = { Text("Enter Nutritionix API Key") },
+                                    singleLine = true,
+                                    visualTransformation = if (ixKeyVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                                    trailingIcon = {
+                                        IconButton(onClick = { ixKeyVisible = !ixKeyVisible }) {
+                                            Text(if (ixKeyVisible) "Hide" else "Show", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("settings_ix_key_input"),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                    )
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Button(
+                                onClick = {
+                                    viewModel.saveApiCredentials(
+                                        usdaKey = usdaKeyInput,
+                                        ixAppId = ixAppIdInput,
+                                        ixApiKey = ixApiKeyInput
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("settings_save_api_credentials_button"),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Save Credentials")
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Shared Action Buttons Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (activeDialogTab == 1) {
+                        TextButton(
+                            onClick = {
+                                viewModel.resetRdaToDefaults()
+                            },
+                            modifier = Modifier.testTag("dialog_reset_all_button")
+                        ) {
+                            Text(
+                                text = "Reset All Custom",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.testTag("settings_cancel_button")
+                        ) {
+                            Text(if (activeDialogTab == 0) "Cancel" else "Close")
+                        }
+
+                        if (activeDialogTab == 0) {
+                            Button(
+                                onClick = {
+                                    val age = ageInput.toIntOrNull() ?: currentAge
+                                    viewModel.applyRdaProfile(
+                                        age = age,
+                                        weight = currentWeight,
+                                        activityLevel = currentActivity,
+                                        sex = selectedSex
+                                    )
+                                    onDismiss()
+                                },
+                                enabled = ageInput.isNotBlank() && (ageInput.toIntOrNull() ?: 0) > 0,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.testTag("settings_confirm_button")
+                            ) {
+                                Text("Save & Update")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FoodDatabaseLookupTab(viewModel: NutritionViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var searchQuery by remember { mutableStateOf("") }
+    var expandedFoodName by remember { mutableStateOf<String?>(null) }
+    
+    // Dialog state for adding food
+    var showLogDialogForFood by remember { mutableStateOf<com.example.data.LookupFood?>(null) }
+    var selectedMealType by remember { mutableStateOf("Lunch") }
+    var servingMultiplier by remember { mutableStateOf("1.0") }
+
+    val filteredFoods = remember(searchQuery) {
+        if (searchQuery.isBlank()) {
+            com.example.data.FoodLookupDatabase.ITEMS
+        } else {
+            com.example.data.FoodLookupDatabase.ITEMS.filter {
+                it.name.contains(searchQuery, ignoreCase = true) ||
+                it.category.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .testTag("food_database_lookup_tab_list"),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            // Header Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "🔎 Clinical Nutrient Database",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Browse or search peer-reviewed food items containing exact profiles for all 41 essential clinical nutrients.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        item {
+            // Search field
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("food_db_search_input"),
+                placeholder = { Text("Search from 41-nutrient directory...") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search"
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(imageVector = Icons.Default.Close, contentDescription = "Clear")
+                        }
+                    }
+                },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        }
+
+        if (filteredFoods.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No matching clinical foods found.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        } else {
+            items(filteredFoods) { food ->
+                val isExpanded = expandedFoodName == food.name
+                
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { expandedFoodName = if (isExpanded) null else food.name }
+                        .testTag("food_db_item_${food.name.replace(" ", "_").lowercase()}"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isExpanded) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
+                    ),
+                    border = BorderStroke(
+                        1.dp, 
+                        if (isExpanded) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f) 
+                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(food.emoji, fontSize = 18.sp)
+                                }
+                                Column {
+                                    Text(
+                                        text = food.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Serving: ${food.servingSize} • ${food.category}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Button(
+                                    onClick = { showLogDialogForFood = food },
+                                    modifier = Modifier
+                                        .height(34.dp)
+                                        .testTag("log_db_food_btn_${food.name.replace(" ", "_").lowercase()}"),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.secondary
+                                    ),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Log", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                }
+
+                                Icon(
+                                    imageVector = if (isExpanded) Icons.Default.Close else Icons.Default.ArrowDropDown,
+                                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        if (isExpanded) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Text(
+                                text = "41 CLINICAL NUTRIENT PROFILE VALUES (100% PRE-MAPPED)",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+
+                            // Sort definitions by group
+                            val groupedDefinitions = Nutrients.DEFINITIONS.groupBy { it.group }
+
+                            groupedDefinitions.forEach { (group, definitions) ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                                    ),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.08f))
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text(
+                                            text = group.displayName,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier.padding(bottom = 6.dp)
+                                        )
+
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            definitions.forEach { def ->
+                                                val value = food.getNutrientValue(def.key)
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = def.name,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Text(
+                                                        text = "$value ${def.unit}",
+                                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Dialog for adding food to logs with multiplier
+    if (showLogDialogForFood != null) {
+        val food = showLogDialogForFood!!
+        Dialog(onDismissRequest = { showLogDialogForFood = null }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .testTag("log_db_food_dialog"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Log ${food.name} to Journal",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = servingMultiplier,
+                        onValueChange = { newValue ->
+                            if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                                servingMultiplier = newValue
+                            }
+                        },
+                        label = { Text("Portions / Servings Factor") },
+                        placeholder = { Text("1.0") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("log_db_food_multiplier"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Meal Type Chip Row
+                    Text(
+                        text = "Select Meal Slice",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+
+                    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        mealTypes.forEach { type ->
+                            val isSelected = selectedMealType == type
+                            Surface(
+                                onClick = { selectedMealType = type },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(34.dp)
+                                    .testTag("log_db_meal_chip_$type"),
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.secondary) else null
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    Text(
+                                        text = type,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            fontSize = 9.sp
+                                        ),
+                                        color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = { showLogDialogForFood = null },
+                            modifier = Modifier.testTag("log_db_dismiss_btn")
+                        ) {
+                            Text("Dismiss")
+                        }
+                        
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Button(
+                            onClick = {
+                                val multiplier = servingMultiplier.toDoubleOrNull() ?: 1.0
+                                viewModel.addManualFoodLog(
+                                    foodName = food.name,
+                                    servingSize = multiplier,
+                                    mealType = selectedMealType
+                                )
+                                showLogDialogForFood = null
+                                Toast.makeText(context, "Logged ${food.name} successfully with pre-mapped 41 nutrients!", Toast.LENGTH_SHORT).show()
+                            },
+                            enabled = servingMultiplier.isNotBlank() && (servingMultiplier.toDoubleOrNull() ?: 0.0) > 0.0,
+                            modifier = Modifier.testTag("log_db_confirm_btn")
+                        ) {
+                            Text("Commit Entry")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FoodNutrientBreakdownBottomSheet(
+    entry: FoodLogEntry,
+    viewModel: NutritionViewModel,
+    onDismiss: () -> Unit
+) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val rdaOverrides by viewModel.customRdaOverrides.collectAsState()
+    
+    var searchQuery by remember { mutableStateOf("") }
+    var showOnlyPresent by remember { mutableStateOf(false) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = state,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .width(40.dp)
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
+                    .padding(vertical = 8.dp)
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .padding(horizontal = 20.dp)
+                .navigationBarsPadding()
+        ) {
+            // Food Header
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Detailed Breakdown",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = entry.foodName,
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                
+                // Meal Badge & Calories Circle
+                val calVal = ((entry.nutrients["calories"] ?: 0.0) * entry.quantity).toInt()
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        ),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "$calVal kcal",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    Text(
+                        text = "${if (entry.quantity % 1.0 == 0.0) entry.quantity.toInt().toString() else String.format(Locale.US, "%.1f", entry.quantity)} ${entry.unit}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // Major Macros Summary Banner
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    val carbsG = (entry.nutrients["carbohydrates"] ?: 0.0) * entry.quantity
+                    val protG = (entry.nutrients["protein"] ?: 0.0) * entry.quantity
+                    val fatG = (entry.nutrients["fat"] ?: 0.0) * entry.quantity
+                    val fiberG = (entry.nutrients["fiber"] ?: 0.0) * entry.quantity
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Carbs", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("${String.format(Locale.US, "%.1f", carbsG)}g", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = Color(0xFF3897F5))
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Protein", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("${String.format(Locale.US, "%.1f", protG)}g", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = Color(0xFFFF9800))
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Fat", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("${String.format(Locale.US, "%.1f", fatG)}g", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = Color(0xFF4CAF50))
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Fiber", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("${String.format(Locale.US, "%.1f", fiberG)}g", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.secondary)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Search and Filter Controls Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Filter 41 nutrients...", style = MaterialTheme.typography.bodyMedium) },
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).testTag("dialog_nutrient_filter_search"),
+                    leadingIcon = {
+                        Icon(imageVector = Icons.Default.Search, contentDescription = "Search", modifier = Modifier.size(18.dp))
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(imageVector = Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(
+                            if (showOnlyPresent) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                        .clickable { showOnlyPresent = !showOnlyPresent }
+                        .border(
+                            1.dp,
+                            if (showOnlyPresent) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                            RoundedCornerShape(20.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .testTag("dialog_nutrient_present_chip"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (showOnlyPresent) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Text(
+                            text = "Active Only",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            color = if (showOnlyPresent) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Scrollable grouped list of 41 nutrients
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 24.dp)
+            ) {
+                val groupedNutrients = com.example.data.Nutrients.DEFINITIONS.groupBy { it.group }
+
+                com.example.data.NutrientGroup.values().forEach { group ->
+                    val allGroupDefs = groupedNutrients[group] ?: emptyList()
+                    val filteredDefs = allGroupDefs.filter { def ->
+                        val value = (entry.nutrients[def.key] ?: 0.0) * entry.quantity
+                        val matchesSearch = def.name.contains(searchQuery, ignoreCase = true)
+                        val matchesPresent = !showOnlyPresent || value > 0.1
+                        matchesSearch && matchesPresent
+                    }
+
+                    if (filteredDefs.isNotEmpty()) {
+                        // Section Header
+                        item {
+                            Text(
+                                text = group.displayName,
+                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
+                                color = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
+                            )
+                        }
+
+                        items(filteredDefs) { def ->
+                            val rawValue = entry.nutrients[def.key] ?: 0.0
+                            val actualValue = rawValue * entry.quantity
+                            val targetRda = rdaOverrides[def.key] ?: def.rda
+                            val percentage = if (targetRda > 0.0) (actualValue / targetRda) else 0.0
+
+                            NutrientRowItem(
+                                def = def,
+                                actualValue = actualValue,
+                                targetRda = targetRda,
+                                percentage = percentage
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NutrientRowItem(
+    def: com.example.data.NutrientDefinition,
+    actualValue: Double,
+    targetRda: Double,
+    percentage: Double
+) {
+    val progressPercent = (percentage * 100).toInt()
+    val isLimit = def.isMaxLimit
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("nutrient_breakdown_row_${def.key}"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+        ),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Nutrients label & values row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = def.name,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (isLimit) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f))
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "LIMIT",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+                    }
+                    if (def.description.isNotEmpty()) {
+                        Text(
+                            text = def.description,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "${if (actualValue % 1.0 == 0.0 || actualValue > 9.9) actualValue.toInt().toString() else String.format(Locale.US, "%.1f", actualValue)} ${def.unit}",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        color = if (isLimit && actualValue > targetRda) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "RDA: ${targetRda.toInt()} ${def.unit}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Percentage & progress bar
+            val barPercentFraction = percentage.coerceIn(0.0, 1.1).toFloat()
+            val barColor = when {
+                isLimit && actualValue > targetRda -> MaterialTheme.colorScheme.error
+                isLimit -> Color(0xFF2E7D32) // Safe under upper limit
+                actualValue >= targetRda -> Color(0xFF2E7D32) // Satisfied green
+                else -> MaterialTheme.colorScheme.error // Highlight nutrients falling below RDA in red to alert of potential deficiencies
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                LinearProgressIndicator(
+                    progress = { barPercentFraction },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(6.dp)
+                        .clip(CircleShape),
+                    color = barColor,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+
+                Text(
+                    text = "$progressPercent%",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                    color = barColor
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun RdaFilterChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+            .clickable { onClick() }
+            .border(
+                width = 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(20.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun NutrientDeficiencyIndicatorPanel(viewModel: NutritionViewModel) {
+    val dailyNutrients by viewModel.dailyNutrients.collectAsState()
+    
+    val rdaNutrients = remember(dailyNutrients) {
+        dailyNutrients.filter { !it.definition.isMaxLimit && it.definition.rda > 0.0 }
+    }
+    
+    val totalCount = rdaNutrients.size
+    val metCount = rdaNutrients.count { it.percentage >= 100.0 }
+    val moderateCount = rdaNutrients.count { it.percentage in 50.0..99.9 }
+    val severeCount = rdaNutrients.count { it.percentage < 50.0 }
+    
+    val rdaMatchPercentage = if (totalCount > 0) (metCount.toFloat() / totalCount) * 100 else 0f
+    
+    var scoreFilterState by remember { mutableStateOf(0) } // 0 = All Targets, 1 = Great (Met), 2 = Moderate (50-99%), 3 = Severe (<50%)
+    
+    val groupExpandStates = remember {
+        mutableStateMapOf<com.example.data.NutrientGroup, Boolean>().apply {
+            com.example.data.NutrientGroup.values().forEach { put(it, false) }
+        }
+    }
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("nutrient_deficiency_indicator_panel_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Deficiency Tracking Indicator",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "RDA Deficiency Center",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "41 Essential Nutrients RDA Matching Engine",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            when {
+                                rdaMatchPercentage >= 80f -> Color(0xFFE8F5E9)
+                                rdaMatchPercentage >= 50f -> Color(0xFFFFF3E0)
+                                else -> Color(0xFFFFEBEE)
+                            }
+                        )
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "Match Score: ${rdaMatchPercentage.toInt()}%",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                rdaMatchPercentage >= 80f -> Color(0xFF2E7D32)
+                                rdaMatchPercentage >= 50f -> Color(0xFFE65100)
+                                else -> Color(0xFFC62828)
+                            }
+                        )
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
+                        RoundedCornerShape(12.dp)
+                    )
+                    .border(
+                        1.dp, 
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.08f), 
+                        RoundedCornerShape(12.dp)
+                    )
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier.size(76.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        progress = rdaMatchPercentage / 100f,
+                        modifier = Modifier.fillMaxSize(),
+                        color = when {
+                            rdaMatchPercentage >= 80f -> Color(0xFF2E7D32)
+                            rdaMatchPercentage >= 50f -> Color(0xFFF57C00)
+                            else -> Color(0xFFD32F2F)
+                        },
+                        trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                        strokeWidth = 8.dp
+                    )
+                    
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "${metCount}/$totalCount",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Met Goal",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = when {
+                            rdaMatchPercentage >= 90f -> "Superb coverage! Your diet is hitting almost all daily biochemical targets."
+                            rdaMatchPercentage >= 70f -> "Healthy nutrition. Only minor micro-nutrient gaps exist."
+                            rdaMatchPercentage >= 40f -> "Moderate deficiencies. Multiple vitamin/mineral targets are missing."
+                            metCount > 0 -> "Critical gaps found. You are missing core regulatory nutritional benchmarks."
+                            else -> "Inactive/Empty. Log food entries to calculate your daily RDA Match score."
+                        },
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 15.sp
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        QuickStatsItem(
+                            label = "Severe",
+                            count = severeCount,
+                            color = Color(0xFFD32F2F),
+                            isSelected = scoreFilterState == 3,
+                            onClick = { scoreFilterState = if (scoreFilterState == 3) 0 else 3 }
+                        )
+                        QuickStatsItem(
+                            label = "Mod.",
+                            count = moderateCount,
+                            color = Color(0xFFF57C00),
+                            isSelected = scoreFilterState == 2,
+                            onClick = { scoreFilterState = if (scoreFilterState == 2) 0 else 2 }
+                        )
+                        QuickStatsItem(
+                            label = "Met",
+                            count = metCount,
+                            color = Color(0xFF2E7D32),
+                            isSelected = scoreFilterState == 1,
+                            onClick = { scoreFilterState = if (scoreFilterState == 1) 0 else 1 }
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(14.dp))
+            
+            if (scoreFilterState != 0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val filterLabel = when (scoreFilterState) {
+                        1 -> "Showing Target Goals Met (>= 100% RDA)"
+                        2 -> "Showing Moderate Deficiency (50% - 99% RDA)"
+                        else -> "Showing Severe Deficiences (< 50% RDA)"
+                    }
+                    Text(
+                        text = filterLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                    
+                    TextButton(
+                        onClick = { scoreFilterState = 0 },
+                        modifier = Modifier.height(24.dp).padding(horizontal = 4.dp)
+                    ) {
+                        Text("Reset filter", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.example.data.NutrientGroup.values().forEach { group ->
+                    val groupItems = rdaNutrients.filter { it.definition.group == group }
+                    if (groupItems.isNotEmpty()) {
+                        val filteredGroupItems = groupItems.filter { item ->
+                            when (scoreFilterState) {
+                                1 -> item.percentage >= 100.0
+                                2 -> item.percentage in 50.0..99.9
+                                3 -> item.percentage < 50.0
+                                else -> true
+                            }
+                        }
+                        
+                        if (filteredGroupItems.isNotEmpty()) {
+                            val groupMetCount = groupItems.count { it.percentage >= 100.0 }
+                            val groupTotal = groupItems.size
+                            val isExpanded = groupExpandStates[group] ?: false
+                            
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.12f)
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.05f))
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { groupExpandStates[group] = !isExpanded },
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                                contentDescription = "Expand details",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Text(
+                                                text = group.displayName,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                        
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "${groupMetCount}/${groupTotal} met",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            LinearProgressIndicator(
+                                                progress = if (groupTotal > 0) groupMetCount.toFloat() / groupTotal else 0f,
+                                                modifier = Modifier
+                                                    .width(48.dp)
+                                                    .height(6.dp)
+                                                    .clip(RoundedCornerShape(3.dp)),
+                                                color = when {
+                                                    groupMetCount == groupTotal -> Color(0xFF2E7D32)
+                                                    groupMetCount.toFloat() / groupTotal >= 0.5f -> Color(0xFFF57C00)
+                                                    else -> Color(0xFFD32F2F)
+                                                },
+                                                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                                            )
+                                        }
+                                    }
+                                    
+                                    if (isExpanded) {
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.06f))
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        
+                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            filteredGroupItems.sortedBy { it.percentage }.forEach { item ->
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(6.dp)
+                                                                .background(
+                                                                    when {
+                                                                        item.percentage >= 100.0 -> Color(0xFF2E7D32)
+                                                                        item.percentage >= 50.0 -> Color(0xFFF57C00)
+                                                                        else -> Color(0xFFD32F2F)
+                                                                    },
+                                                                    CircleShape
+                                                                )
+                                                        )
+                                                        Text(
+                                                            text = item.definition.name,
+                                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                                            color = MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                    }
+                                                    
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
+                                                        val intakeValueStr = if (item.definition.key == "calories") {
+                                                            "${item.intake.toInt()} / ${item.definition.rda.toInt()}"
+                                                        } else {
+                                                            "${String.format(Locale.US, "%.1f", item.intake)} / ${String.format(Locale.US, "%.1f", item.definition.rda)}"
+                                                        }
+                                                        Text(
+                                                            text = "$intakeValueStr ${item.definition.unit}",
+                                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                        Text(
+                                                            text = "${item.percentage.toInt()}%",
+                                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = when {
+                                                                    item.percentage >= 100.0 -> Color(0xFF2E7D32)
+                                                                    item.percentage >= 50.0 -> Color(0xFFE65100)
+                                                                    else -> Color(0xFFC62828)
+                                                                }
+                                                            )
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -5823,3 +18514,1948 @@ fun BarcodeQRScannerScreen(
         }
     }
 }
+
+@Composable
+fun QuickStatsItem(
+    label: String,
+    count: Int,
+    color: Color,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (isSelected) color.copy(alpha = 0.15f)
+                else Color.Transparent
+            )
+            .clickable { onClick() }
+            .border(
+                1.dp,
+                if (isSelected) color else Color.Transparent,
+                RoundedCornerShape(8.dp)
+            )
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(color, CircleShape)
+            )
+            Text(
+                text = "$count $label",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) color else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            )
+        }
+    }
+}
+
+@Composable
+fun DailyDeficiencyVisualAlerter(viewModel: NutritionViewModel) {
+    val dailyNutrients by viewModel.dailyNutrients.collectAsState()
+    val selectedGroundedNutrient by viewModel.selectedGroundedNutrient.collectAsState()
+    val groundedBenefitText by viewModel.groundedBenefitText.collectAsState()
+    val isGroundedBenefitLoading by viewModel.isGroundedBenefitLoading.collectAsState()
+    val groundedBenefitSources by viewModel.groundedBenefitSources.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    
+    // Filter target nutrients falling below 100% daily RDA
+    val deficiencies = remember(dailyNutrients) {
+        dailyNutrients.filter { 
+            !it.definition.isMaxLimit && 
+            it.intake < it.definition.rda && 
+            it.definition.rda > 0.0 
+        }.sortedBy { it.percentage } // Sort by lowest percentage/most severe deficit first
+    }
+
+    var filterState by remember { mutableStateOf(0) } // 0 = All gaps, 1 = Critical (< 50% met)
+    val filteredDeficiencies = remember(deficiencies, filterState) {
+        if (filterState == 1) {
+            deficiencies.filter { it.percentage < 50.0 }
+        } else {
+            deficiencies
+        }
+    }
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("deficiency_visual_alerter_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.08f)
+        ),
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Deficiencies Warning Alert",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "RDA Deficiency Alerts Plan",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            text = "Daily nutrients and active gaps below 100% RDA",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                
+                // Badge for count of deficiencies
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.error)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "${deficiencies.size} Gaps",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onError
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(10.dp))
+            
+            Text(
+                text = "These nutrients fall below your daily recommended targets. Click any alert card below to inspect its biological benefits, clinical pathways, and recommended wellness foods powered by Google Search grounding.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 15.sp
+            )
+            
+            Spacer(modifier = Modifier.height(10.dp))
+            
+            // Toggle Filter Row (Chips)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // All Gaps
+                Surface(
+                    onClick = { filterState = 0 },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(32.dp)
+                        .testTag("deficiency_filter_all"),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (filterState == 0) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surface,
+                    contentColor = if (filterState == 0) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface,
+                    border = BorderStroke(1.dp, if (filterState == 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Text(
+                            text = "All Gaps (${deficiencies.size})",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+                
+                // Critical Gaps (<50%)
+                val criticalCount = remember(deficiencies) { deficiencies.count { it.percentage < 50.0 } }
+                Surface(
+                    onClick = { filterState = 1 },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(32.dp)
+                        .testTag("deficiency_filter_critical"),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (filterState == 1) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surface,
+                    contentColor = if (filterState == 1) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurface,
+                    border = BorderStroke(1.dp, if (filterState == 1) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Text(
+                            text = "Critical (<50% RDA)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(10.dp))
+            
+            if (filteredDeficiencies.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                        .padding(14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Success",
+                            tint = Color(0xFF2E7D32),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = if (filterState == 1) "Zero critical deficiencies left!" else "Perfect! Zero RDA gaps left today!",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = Color(0xFF2E7D32)
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 240.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    filteredDeficiencies.forEach { status ->
+                        val def = status.definition
+                        val isCritical = status.percentage < 50.0
+                        
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    viewModel.queryNutrientBenefitGrounding(
+                                        nutrientName = def.name,
+                                        nutrientKey = def.key,
+                                        fallbackText = def.description.ifEmpty { "Essential critical nutrient supporting metabolic pathways, energetic resilience, cellular development, and physiological balance." }
+                                    )
+                                }
+                                .testTag("deficiency_visual_row_${def.key}"),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = if (isCritical) 0.35f else 0.15f)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = def.name,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            
+                                            Icon(
+                                                imageVector = Icons.Default.Info,
+                                                contentDescription = "Show benefits",
+                                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            
+                                            // Red Label
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(
+                                                        if (isCritical) MaterialTheme.colorScheme.errorContainer
+                                                        else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                                                    )
+                                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (isCritical) "CRITICAL GAP" else "RDA GAP",
+                                                    color = MaterialTheme.colorScheme.error,
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.ExtraBold)
+                                                )
+                                            }
+                                        }
+                                        
+                                        // Recommendation source Text:
+                                        val foodSourceTip = remember(def.key) {
+                                            when (def.key) {
+                                                "calories" -> "Include wholesome oats, avocados, whole grains, and lean ribeye steaks."
+                                                "protein" -> "Greek yogurt, turkey breast slices, raw chicken eggs, or soybeans."
+                                                "carbohydrates" -> "Sweet potatoes, brown wild rice, organic quinoa, and berries."
+                                                "fat" -> "Extra virgin olive oil, premium raw nuts, chia seeds, and fresh salmon."
+                                                "fiber" -> "Chia seeds, split peas, black organic beans, flax seeds, or whole pears."
+                                                "water" -> "Drink filtered water, clean bone broths, herbal teas, or hydration infusions."
+                                                "calcium" -> "Greek yogurt, fortified unsweetened almond milk, dark kale, or sesame."
+                                                "iron" -> "Tender baby spinach, lentils, high-quality black beans, or red steak with lemon."
+                                                "vitamin_c" -> "Fresh sweet oranges, organic red bell peppers, clean strawberries, or kiwi."
+                                                "potassium" -> "Medium fresh bananas, sweet avocados, gold baked potatoes, or coconut water."
+                                                "vitamin_d" -> "Fortified grass-fed dairy, whole organic egg yolks, fresh salmon, or direct sun."
+                                                "magnesium" -> "Quinoa, raw pumpkin seeds, raw almonds, and premium 70%+ dark chocolate."
+                                                "zinc" -> "Shellfish oysters, grass-fed beef, organic pumpkin seeds, or rich lentils."
+                                                else -> "Focus on fresh unprocessed leafy vegetable greens, organic meats, seeds, and nuts."
+                                            }
+                                        }
+                                        Text(
+                                            text = "Best sources: $foodSourceTip",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
+                                    
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = "${status.intake.toInt()} / ${def.rda.toInt()} ${def.unit}",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        Text(
+                                            text = "Need ${(def.rda - status.intake).toInt()} ${def.unit} more",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                
+                                Spacer(modifier = Modifier.height(8.dp))
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    LinearProgressIndicator(
+                                        progress = { status.percentage.coerceIn(0.0, 100.0).toFloat() / 100.0f },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(8.dp)
+                                            .clip(CircleShape),
+                                        color = MaterialTheme.colorScheme.error,
+                                        trackColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
+                                    )
+                                    
+                                    Text(
+                                        text = "${status.percentage.toInt()}% met",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Google Search Grounding Benefit Popup Dialog
+    if (selectedGroundedNutrient != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearNutrientBenefitGrounding() },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = "Clinical Nutrient Benefits",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text(
+                        text = "$selectedGroundedNutrient Benefits",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isGroundedBenefitLoading) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                strokeWidth = 3.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Grounding via Google Search...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = groundedBenefitText ?: "No coverage data loaded from clinical sources.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 20.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        if (groundedBenefitSources.isNotEmpty()) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                            
+                            Text(
+                                text = "Verified Grounded Sources & Clinician References:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                groundedBenefitSources.forEach { (title, uri) ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                            .clickable {
+                                                try {
+                                                    val intent = android.content.Intent(
+                                                        android.content.Intent.ACTION_VIEW,
+                                                        android.net.Uri.parse(uri)
+                                                    )
+                                                    context.startActivity(intent)
+                                                } catch (e: Exception) {
+                                                    android.widget.Toast.makeText(context, "Link unavailable offline", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = title,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Default.Share,
+                                            contentDescription = "Open medical reference source URL",
+                                            tint = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.clearNutrientBenefitGrounding() },
+                    modifier = Modifier.testTag("dismiss_benefit_dialog_btn")
+                ) {
+                    Text(
+                        text = "Dismiss",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            shape = RoundedCornerShape(20.dp),
+            tonalElevation = 6.dp
+        )
+    }
+}
+
+@Composable
+fun RdaCrossReferenceUtility(viewModel: NutritionViewModel) {
+    val currentDateEntries by viewModel.currentDateEntries.collectAsState()
+    val dailyNutrients by viewModel.dailyNutrients.collectAsState()
+    
+    var selectedSourceIndex by remember { mutableStateOf(-1) } // -1 = Today's Cumulative, -2 = Premium Balanced Breakfast Preset, -3 = Sockeye Salmon Plate Preset, other = entry index
+    var searchQuery by remember { mutableStateOf("") }
+    
+    // Simulating Preset nutrients contribution
+    val breakfastPreset = remember {
+        mapOf(
+            "calories" to 420.0,
+            "protein" to 28.0,
+            "carbohydrates" to 45.0,
+            "fat" to 14.0,
+            "fiber" to 6.0,
+            "water" to 250.0,
+            "calcium" to 300.0,
+            "iron" to 4.5,
+            "vitamin_c" to 45.0,
+            "potassium" to 550.0,
+            "magnesium" to 120.0,
+            "vitamin_d" to 5.0,
+            "zinc" to 3.0
+        )
+    }
+
+    val salmonPreset = remember {
+        mapOf(
+            "calories" to 580.0,
+            "protein" to 45.0,
+            "carbohydrates" to 10.0,
+            "fat" to 22.0,
+            "fiber" to 8.0,
+            "water" to 150.0,
+            "calcium" to 180.0,
+            "iron" to 5.2,
+            "vitamin_c" to 60.0,
+            "potassium" to 850.0,
+            "magnesium" to 160.0,
+            "vitamin_d" to 12.0,
+            "zinc" to 4.8
+        )
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("rda_cross_reference_utility_card"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Title Info
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Default.List,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = "RDA Cross-Reference & Warning Utility",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(4.dp))
+            
+            Text(
+                text = "Interactively select daily logs or preset combinations to instantly map nutrient contributions against RDA standards and trigger visual deficit highlights.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Scrollable chips row to select source
+            Text(
+                text = "Select Cross-Reference Source:",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.primary
+            )
+            
+            Spacer(modifier = Modifier.height(6.dp))
+
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().testTag("source_chips_row")
+            ) {
+                // Today's cumulative
+                item {
+                    val isSelected = selectedSourceIndex == -1
+                    RdaFilterChip(
+                        selected = isSelected,
+                        onClick = { selectedSourceIndex = -1 },
+                        label = "Today's Cumulative",
+                        modifier = Modifier.testTag("chip_cumulative")
+                    )
+                }
+
+                // If user doesn't have custom logs or even if they have, offer samples for rich previewing
+                item {
+                    val isSelected = selectedSourceIndex == -2
+                    RdaFilterChip(
+                        selected = isSelected,
+                        onClick = { selectedSourceIndex = -2 },
+                        label = "Sample: Balanced Breakfast",
+                        modifier = Modifier.testTag("chip_sample_breakfast")
+                    )
+                }
+
+                item {
+                    val isSelected = selectedSourceIndex == -3
+                    RdaFilterChip(
+                        selected = isSelected,
+                        onClick = { selectedSourceIndex = -3 },
+                        label = "Sample: Sockeye Salmon Plate",
+                        modifier = Modifier.testTag("chip_sample_salmon")
+                    )
+                }
+
+                // Custom Log entries
+                itemsIndexed(currentDateEntries) { idx, log ->
+                    val isSelected = selectedSourceIndex == idx
+                    RdaFilterChip(
+                        selected = isSelected,
+                        onClick = { selectedSourceIndex = idx },
+                        label = "${log.mealType}: ${log.foodName}",
+                        modifier = Modifier.testTag("chip_log_${idx}")
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Search Bar for Nutrient Comparison Table
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Filter cross-referenced nutrients...", style = MaterialTheme.typography.bodySmall) },
+                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("rda_util_search_input"),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.05f)
+                )
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Nutrient Cross-Reference Header Table Label
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Nutrient (RDA Target)", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1.3f))
+                Text("Contrib.", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(0.9f), textAlign = TextAlign.End)
+                Text("Total Today Status", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1.2f), textAlign = TextAlign.End)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Filtrate and Display comparison list
+            val crossReferenceRows = remember(dailyNutrients, selectedSourceIndex, currentDateEntries, searchQuery) {
+                dailyNutrients.filter {
+                    it.definition.name.contains(searchQuery, ignoreCase = true)
+                }.map { status ->
+                    val def = status.definition
+                    // Calculate selected source contribution
+                    val contribution = when (selectedSourceIndex) {
+                        -1 -> status.intake // For Cumulative, the contribution is the whole intake
+                        -2 -> breakfastPreset[def.key] ?: 0.0
+                        -3 -> salmonPreset[def.key] ?: 0.0
+                        else -> {
+                            if (selectedSourceIndex in currentDateEntries.indices) {
+                                currentDateEntries[selectedSourceIndex].nutrients[def.key] ?: 0.0
+                            } else 0.0
+                        }
+                    }
+                    val contributionPercentage = if (def.rda > 0) (contribution / def.rda * 100.0) else 0.0
+                    Triple(status, contribution, contributionPercentage)
+                }
+            }
+
+            if (crossReferenceRows.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No matching nutrients found.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Show a maximum of 6 nutrients initially, with a "Show All matched" toggle if list is long
+                    var isExpandedList by remember { mutableStateOf(false) }
+                    val displayRows = if (isExpandedList) crossReferenceRows else crossReferenceRows.take(6)
+
+                    displayRows.forEach { (status, contrib, contribPct) ->
+                        val def = status.definition
+                        val isLimit = def.isMaxLimit
+                        val currentPct = status.percentage
+                        
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Column 1: Nutrient details
+                            Column(modifier = Modifier.weight(1.3f)) {
+                                Text(
+                                    text = def.name,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "RDA: ${def.rda.toInt()}${def.unit}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            // Column 2: Selection Contribution Contribution
+                            Column(modifier = Modifier.weight(0.9f), horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "+${contrib.toInt()}${def.unit}",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                    color = if (contrib > 0) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "(${contribPct.toInt()}% RDA)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (contrib > 0) MaterialTheme.colorScheme.secondary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            }
+
+                            // Column 3: Cumulative & warning visual highlight tag
+                            Column(modifier = Modifier.weight(1.2f), horizontalAlignment = Alignment.End) {
+                                val (bgCol, textCol, labelText) = when {
+                                    isLimit -> {
+                                        if (currentPct > 100.0) {
+                                            Triple(Color(0xFFFFECEB), Color(0xFFC53030), "⚠️ OVER LIMIT (${currentPct.toInt()}%)")
+                                        } else {
+                                            Triple(Color(0xFFE6FFFA), Color(0xFF234E52), "✅ SAFE LOWER (${currentPct.toInt()}%)")
+                                        }
+                                    }
+                                    currentPct >= 100.0 -> {
+                                        Triple(Color(0xFFF0FFF4), Color(0xFF22543D), "✅ MET (${currentPct.toInt()}%)")
+                                    }
+                                    currentPct < 50.0 -> {
+                                        Triple(Color(0xFFFFECEB), Color(0xFFC53030), "⚠️ CRITICAL LOW (${currentPct.toInt()}%)")
+                                    }
+                                    else -> {
+                                        Triple(Color(0xFFFEFCBF), Color(0xFF744210), "⚠️ DEFICIT (${currentPct.toInt()}%)")
+                                    }
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(bgCol)
+                                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                                        .testTag("rda_highlight_${def.key}")
+                                ) {
+                                    Text(
+                                        text = labelText,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold, fontSize = 9.sp),
+                                        color = textCol
+                                    )
+                                }
+                                
+                                Spacer(modifier = Modifier.height(2.dp))
+                                
+                                Text(
+                                    text = "Total: ${status.intake.toInt()} ${def.unit}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    if (crossReferenceRows.size > 6) {
+                        TextButton(
+                            onClick = { isExpandedList = !isExpandedList },
+                            modifier = Modifier.align(Alignment.CenterHorizontally).testTag("toggle_cross_reference_expanded_button")
+                        ) {
+                            Text(
+                                text = if (isExpandedList) "Show Less" else "Show All ${crossReferenceRows.size} Matched Nutrients",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+enum class DataGridSortOrder {
+    ASCENDING, DESCENDING
+}
+
+enum class DataGridSortColumn {
+    NUTRIENT_NAME,
+    RDA_TARGET,
+    TOTAL_INTAKE,
+    ADHERENCE,
+    FOOD_ENTRY
+}
+
+@Composable
+fun DataGridHeaderCell(
+    text: String,
+    width: androidx.compose.ui.unit.Dp,
+    sortable: Boolean = true,
+    activeSort: Boolean = false,
+    order: DataGridSortOrder = DataGridSortOrder.ASCENDING,
+    onClick: () -> Unit = {}
+) {
+    Box(
+        modifier = Modifier
+            .width(width)
+            .fillMaxHeight()
+            .clickable(enabled = sortable) { onClick() }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = if (activeSort) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (sortable) {
+                Icon(
+                    imageVector = if (activeSort) {
+                        if (order == DataGridSortOrder.ASCENDING) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown
+                    } else {
+                        Icons.Default.ArrowDropDown
+                    },
+                    contentDescription = "Sort Icon",
+                    tint = if (activeSort) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun DataGridCell(
+    text: String,
+    width: androidx.compose.ui.unit.Dp,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    bgColor: Color = Color.Transparent,
+    alignToEnd: Boolean = true
+) {
+    Box(
+        modifier = Modifier
+            .width(width)
+            .fillMaxHeight()
+            .background(bgColor)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        contentAlignment = if (alignToEnd) Alignment.CenterEnd else Alignment.CenterStart
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = contentColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+fun CustomCompactSegmentedButton(
+    text: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun CustomFilterGridChip(
+    text: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val containerBg = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+    val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    
+    Box(
+        modifier = Modifier
+            .border(1.dp, borderColor, RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(20.dp))
+            .background(containerBg)
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal),
+            color = contentColor
+        )
+    }
+}
+
+@Composable
+fun NutrientRow(
+    rowIdx: Int,
+    item: com.example.ui.NutrientStatus,
+    horizontalScrollState: androidx.compose.foundation.ScrollState,
+    displayEntries: List<com.example.data.FoodLogEntry>
+) {
+    val rowBg = if (rowIdx % 2 == 0) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.10f)
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .background(rowBg),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(135.dp)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.08f))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Column {
+                Text(
+                    text = item.definition.name,
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = item.definition.group.displayName,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(1.dp)
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
+        )
+
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .horizontalScroll(horizontalScrollState),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val rdaStr = if (item.definition.key == "calories") {
+                "${item.definition.rda.toInt()} ${item.definition.unit}"
+            } else {
+                "${String.format(Locale.US, "%.1f", item.definition.rda)} ${item.definition.unit}"
+            }
+            DataGridCell(text = rdaStr, width = 85.dp)
+
+            val intakeStr = if (item.definition.key == "calories") {
+                "${item.intake.toInt()} ${item.definition.unit}"
+            } else {
+                "${String.format(Locale.US, "%.1f", item.intake)} ${item.definition.unit}"
+            }
+            
+            val adherenceColor = when (item.status) {
+                com.example.ui.StatusColor.GREEN -> Color(0xFF2E7D32)
+                com.example.ui.StatusColor.YELLOW -> Color(0xFFB7791F)
+                com.example.ui.StatusColor.RED -> Color(0xFFC53030)
+            }
+            
+            DataGridCell(
+                text = intakeStr, 
+                width = 90.dp,
+                contentColor = adherenceColor
+            )
+
+            val adherenceStr = if (item.definition.isMaxLimit) {
+                if (item.intake > item.definition.rda) "⚠️ OVER" else "✅ SAFE"
+            } else {
+                "${item.percentage.toInt()}%"
+            }
+            
+            DataGridCell(
+                text = adherenceStr, 
+                width = 85.dp,
+                contentColor = adherenceColor
+            )
+
+            displayEntries.forEach { entry ->
+                val entryValue = entry.nutrients[item.definition.key] ?: 0.0
+                val foodCellStr = if (entryValue == 0.0) {
+                    "-"
+                } else if (item.definition.key == "calories") {
+                    "${entryValue.toInt()}"
+                } else {
+                    String.format(Locale.US, "%.1f", entryValue)
+                }
+                
+                DataGridCell(
+                    text = foodCellStr, 
+                    width = 120.dp,
+                    contentColor = if (entryValue > 0.0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+            }
+        }
+    }
+    HorizontalDivider(
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+        thickness = 1.dp
+    )
+}
+
+@Composable
+fun NutrientDataGrid(viewModel: NutritionViewModel) {
+    val currentDateEntries by viewModel.currentDateEntries.collectAsState()
+    val dailyNutrients by viewModel.dailyNutrients.collectAsState()
+    
+    var searchQuery by remember { mutableStateOf("") }
+    var sortColumn by remember { mutableStateOf(DataGridSortColumn.NUTRIENT_NAME) }
+    var sortOrder by remember { mutableStateOf(DataGridSortOrder.ASCENDING) }
+    var sortFoodIndex by remember { mutableStateOf(-1) }
+    
+    // Grouping & Filtering States
+    var filterGroup by remember { mutableStateOf<com.example.data.NutrientGroup?>(null) }
+    var groupByCategory by remember { mutableStateOf(true) }
+    val groupExpansionStates = remember { 
+        mutableStateMapOf<com.example.data.NutrientGroup, Boolean>().apply {
+            com.example.data.NutrientGroup.values().forEach { put(it, true) }
+        }
+    }
+
+    val displayEntries = if (currentDateEntries.isNotEmpty()) {
+        currentDateEntries
+    } else {
+        listOf(
+            com.example.data.FoodLogEntry(
+                id = -10,
+                date = "",
+                foodName = "Sample Breakfast",
+                mealType = "Breakfast",
+                quantity = 1.0,
+                unit = "serving",
+                nutrients = mapOf(
+                    "calories" to 420.0,
+                    "protein" to 28.0,
+                    "carbohydrates" to 45.0,
+                    "fat" to 14.0,
+                    "fiber" to 6.0,
+                    "water" to 250.0,
+                    "calcium" to 300.0,
+                    "iron" to 4.5,
+                    "vitamin_c" to 45.0,
+                    "potassium" to 550.0,
+                    "magnesium" to 120.0,
+                    "zinc" to 3.0
+                )
+            ),
+            com.example.data.FoodLogEntry(
+                id = -11,
+                date = "",
+                foodName = "Sample Salmon Plate",
+                mealType = "Dinner",
+                quantity = 1.0,
+                unit = "serving",
+                nutrients = mapOf(
+                    "calories" to 580.0,
+                    "protein" to 45.0,
+                    "carbohydrates" to 10.0,
+                    "fat" to 22.0,
+                    "fiber" to 8.0,
+                    "water" to 150.0,
+                    "calcium" to 180.0,
+                    "iron" to 5.2,
+                    "vitamin_c" to 60.0,
+                    "potassium" to 850.0,
+                    "magnesium" to 160.0,
+                    "zinc" to 4.8
+                )
+            )
+        )
+    }
+
+    fun toggleSort(col: DataGridSortColumn, foodIdx: Int = -1) {
+        if (sortColumn == col && sortFoodIndex == foodIdx) {
+            sortOrder = if (sortOrder == DataGridSortOrder.ASCENDING) DataGridSortOrder.DESCENDING else DataGridSortOrder.ASCENDING
+        } else {
+            sortColumn = col
+            sortFoodIndex = foodIdx
+            sortOrder = if (col == DataGridSortColumn.NUTRIENT_NAME) DataGridSortOrder.ASCENDING else DataGridSortOrder.DESCENDING
+        }
+    }
+    
+    val processedNutrients = remember(dailyNutrients, searchQuery, filterGroup) {
+        dailyNutrients.filter {
+            val matchesSearch = it.definition.name.contains(searchQuery, ignoreCase = true) ||
+                    it.definition.group.name.contains(searchQuery, ignoreCase = true)
+            val matchesGroup = filterGroup == null || it.definition.group == filterGroup
+            matchesSearch && matchesGroup
+        }
+    }
+
+    fun sortList(list: List<com.example.ui.NutrientStatus>): List<com.example.ui.NutrientStatus> {
+        val sorted = when (sortColumn) {
+            DataGridSortColumn.NUTRIENT_NAME -> list.sortedBy { it.definition.name.lowercase() }
+            DataGridSortColumn.RDA_TARGET -> list.sortedBy { it.definition.rda }
+            DataGridSortColumn.TOTAL_INTAKE -> list.sortedBy { it.intake }
+            DataGridSortColumn.ADHERENCE -> list.sortedBy { it.percentage }
+            DataGridSortColumn.FOOD_ENTRY -> {
+                list.sortedBy { status ->
+                    if (sortFoodIndex in displayEntries.indices) {
+                        displayEntries[sortFoodIndex].nutrients[status.definition.key] ?: 0.0
+                    } else {
+                        0.0
+                    }
+                }
+            }
+        }
+        return if (sortOrder == DataGridSortOrder.DESCENDING) sorted.reversed() else sorted
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("nutrient_datagrid_card"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Default.List,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "41 Nutrient Interactive DataGrid",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Real-time query, filter, sort, and group macronutrients, minerals, and vitamins with collapsible lists.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 1. Text Search Input
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Search 41 essential nutrients...", style = MaterialTheme.typography.bodySmall) },
+                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("datagrid_search_input"),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = "Search", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.05f)
+                )
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 2. Group & Filter Control Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                        .padding(3.dp)
+                ) {
+                    CustomCompactSegmentedButton(
+                        text = "Grouped View",
+                        isSelected = groupByCategory,
+                        onClick = { groupByCategory = true }
+                    )
+                    CustomCompactSegmentedButton(
+                        text = "Flat View",
+                        isSelected = !groupByCategory,
+                        onClick = { groupByCategory = false }
+                    )
+                }
+
+                Text(
+                    text = "${processedNutrients.size} of 41 Nutrients",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 3. Horizontal Scroll Filter Chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CustomFilterGridChip(
+                    text = "All Groups",
+                    isSelected = filterGroup == null,
+                    onClick = { filterGroup = null }
+                )
+                com.example.data.NutrientGroup.values().forEach { g ->
+                    CustomFilterGridChip(
+                        text = g.displayName,
+                        isSelected = filterGroup == g,
+                        onClick = { filterGroup = g }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (currentDateEntries.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.15f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Sample Data info",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "No custom logs saved today. Displaying high-fidelity interactive preset meals in grid columns for comparison.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(8.dp))
+            ) {
+                val horizontalScrollState = rememberScrollState()
+                
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(135.dp)
+                            .fillMaxHeight()
+                            .clickable { toggleSort(DataGridSortColumn.NUTRIENT_NAME) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Nutrient",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = if (sortColumn == DataGridSortColumn.NUTRIENT_NAME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                            Icon(
+                                imageVector = if (sortColumn == DataGridSortColumn.NUTRIENT_NAME) {
+                                    if (sortOrder == DataGridSortOrder.ASCENDING) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown
+                                } else {
+                                    Icons.Default.ArrowDropDown
+                                },
+                                contentDescription = "Sort name",
+                                tint = if (sortColumn == DataGridSortColumn.NUTRIENT_NAME) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(1.dp)
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .horizontalScroll(horizontalScrollState),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        DataGridHeaderCell(
+                            text = "RDA Target",
+                            width = 85.dp,
+                            activeSort = (sortColumn == DataGridSortColumn.RDA_TARGET),
+                            order = sortOrder,
+                            onClick = { toggleSort(DataGridSortColumn.RDA_TARGET) }
+                        )
+                        DataGridHeaderCell(
+                            text = "Total Intake",
+                            width = 90.dp,
+                            activeSort = (sortColumn == DataGridSortColumn.TOTAL_INTAKE),
+                            order = sortOrder,
+                            onClick = { toggleSort(DataGridSortColumn.TOTAL_INTAKE) }
+                        )
+                        DataGridHeaderCell(
+                            text = "Adherence",
+                            width = 85.dp,
+                            activeSort = (sortColumn == DataGridSortColumn.ADHERENCE),
+                            order = sortOrder,
+                            onClick = { toggleSort(DataGridSortColumn.ADHERENCE) }
+                        )
+                        displayEntries.forEachIndexed { fIdx, entry ->
+                            val capName = if (entry.foodName.length > 15) entry.foodName.take(13) + "..." else entry.foodName
+                            DataGridHeaderCell(
+                                text = capName,
+                                width = 120.dp,
+                                activeSort = (sortColumn == DataGridSortColumn.FOOD_ENTRY && sortFoodIndex == fIdx),
+                                order = sortOrder,
+                                onClick = { toggleSort(DataGridSortColumn.FOOD_ENTRY, fIdx) }
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                    thickness = 1.dp
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(350.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (groupByCategory) {
+                        com.example.data.NutrientGroup.values().forEach { group ->
+                            val groupItems = processedNutrients.filter { it.definition.group == group }
+                            if (groupItems.isNotEmpty()) {
+                                val sortedGroupItems = sortList(groupItems)
+                                val isExpanded = groupExpansionStates[group] ?: true
+                                
+                                // Group Header Row
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(38.dp)
+                                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f))
+                                        .clickable { groupExpansionStates[group] = !isExpanded }
+                                        .padding(horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                            contentDescription = "Expand/Collapse Group",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = group.displayName,
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                    Text(
+                                        text = "${groupItems.size} items",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
+                                    )
+                                }
+                                
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                                    thickness = 1.dp
+                                )
+                                
+                                if (isExpanded) {
+                                    sortedGroupItems.forEachIndexed { rowIdx, item ->
+                                        NutrientRow(
+                                            rowIdx = rowIdx,
+                                            item = item,
+                                            horizontalScrollState = horizontalScrollState,
+                                            displayEntries = displayEntries
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        val sortedFlatList = sortList(processedNutrients)
+                        sortedFlatList.forEachIndexed { rowIdx, item ->
+                            NutrientRow(
+                                rowIdx = rowIdx,
+                                item = item,
+                                horizontalScrollState = horizontalScrollState,
+                                displayEntries = displayEntries
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LogPresetDialog(
+    meal: com.example.data.FavoriteMeal,
+    onDismiss: () -> Unit,
+    onLog: (String) -> Unit
+) {
+    var selectedMealType by remember { mutableStateOf("Breakfast") }
+    val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack", "Supplement")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Log Favorite Preset Meal") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Add all ${meal.foods.size} items of '${meal.name}' to today's journal.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        meal.foods.forEach { food ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = food.foodName,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                    maxLines = 1,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = "${if (food.quantity % 1.0 == 0.0) food.quantity.toInt().toString() else food.quantity} ${food.unit}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Select Daily Meal Category:",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    mealTypes.forEach { type ->
+                        val isSelected = selectedMealType == type
+                        Surface(
+                            onClick = { selectedMealType = type },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(32.dp)
+                                .testTag("log_preset_category_chip_${type.lowercase()}"),
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            border = if (isSelected) BorderStroke(1.2.dp, MaterialTheme.colorScheme.primary) else null
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                Text(
+                                    text = type,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 10.sp
+                                    ),
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onLog(selectedMealType) },
+                modifier = Modifier.testTag("log_preset_confirm_button")
+            ) {
+                Text("Log Meal")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun SavePresetDialog(
+    entries: List<com.example.data.FoodLogEntry>,
+    onDismiss: () -> Unit,
+    onSaveClicked: (String, List<com.example.data.FoodLogEntry>) -> Unit
+) {
+    var presetName by remember { mutableStateOf("") }
+    val selectionStates = remember {
+        mutableStateMapOf<Int, Boolean>().apply {
+            entries.forEachIndexed { index, _ -> put(index, true) }
+        }
+    }
+
+    val selectedEntries = entries.filterIndexed { index, _ -> selectionStates[index] ?: false }
+    val totalCalories = selectedEntries.sumOf { (it.nutrients["calories"] ?: 0.0) * it.quantity }
+    val totalProtein = selectedEntries.sumOf { (it.nutrients["protein"] ?: 0.0) * it.quantity }
+    val totalCarbs = selectedEntries.sumOf { (it.nutrients["carbohydrates"] ?: 0.0) * it.quantity }
+    val totalFat = selectedEntries.sumOf { (it.nutrients["fat"] ?: 0.0) * it.quantity }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save Favorite Meal Preset") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Name your custom preset and choose which foods from today's journal to bundle together.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = presetName,
+                    onValueChange = { presetName = it },
+                    label = { Text("Favorite Meal Name") },
+                    placeholder = { Text("My Clean Breakfast") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("save_preset_name_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                    )
+                )
+
+                Text(
+                    text = "Select Foods to Save:",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        entries.forEachIndexed { index, entry ->
+                            val isChecked = selectionStates[index] ?: false
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { selectionStates[index] = !isChecked }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { selectionStates[index] = it },
+                                    modifier = Modifier.testTag("preset_select_checkbox_$index")
+                                )
+                                Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
+                                    Text(
+                                        text = entry.foodName,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = "${entry.mealType} • ${if (entry.quantity % 1.0 == 0.0) entry.quantity.toInt() else entry.quantity} ${entry.unit}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Totals Selected", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                            Text(
+                                text = "${totalCalories.toInt()} kcal",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("P", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${totalProtein.toInt()}g", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("C", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${totalCarbs.toInt()}g", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("F", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("${totalFat.toInt()}g", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSaveClicked(presetName, selectedEntries) },
+                enabled = presetName.isNotBlank() && selectedEntries.isNotEmpty(),
+                modifier = Modifier.testTag("save_preset_dialog_confirm_button")
+            ) {
+                Text("Save Preset")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun FavoriteMealsLibrarySection(
+    viewModel: NutritionViewModel,
+    modifier: Modifier = Modifier
+) {
+    val favoriteMeals by viewModel.allFavoriteMeals.collectAsState()
+    var isExpanded by remember { mutableStateOf(false) }
+    var mealToLogPreset by remember { mutableStateOf<com.example.data.FavoriteMeal?>(null) }
+
+    if (mealToLogPreset != null) {
+        LogPresetDialog(
+            meal = mealToLogPreset!!,
+            onDismiss = { mealToLogPreset = null },
+            onLog = { mealType ->
+                viewModel.logFavoriteMeal(mealToLogPreset!!, mealType)
+                mealToLogPreset = null
+            }
+        )
+    }
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("favorite_meals_library_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = "Favorite Meals",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Column {
+                        Text(
+                            text = "Favorite Meals Preset Library",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Save combinations & log with 1-click",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                IconButton(onClick = { isExpanded = !isExpanded }) {
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand"
+                    )
+                }
+            }
+
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (favoriteMeals.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No saved meal presets. Tap 'Save Favorite' in your logged journal to bundle and reuse foods.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        favoriteMeals.forEach { meal ->
+                            val presetCal = meal.foods.sumOf { (it.nutrients["calories"] ?: 0.0) * it.quantity }
+                            val presetProtein = meal.foods.sumOf { (it.nutrients["protein"] ?: 0.0) * it.quantity }
+                            val presetCarbs = meal.foods.sumOf { (it.nutrients["carbohydrates"] ?: 0.0) * it.quantity }
+                            val presetFat = meal.foods.sumOf { (it.nutrients["fat"] ?: 0.0) * it.quantity }
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("preset_meal_item_${meal.id}"),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = meal.name,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        
+                                        Text(
+                                            text = meal.foods.joinToString(", ") { it.foodName },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                        )
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                            ) {
+                                                Text(
+                                                    text = "${presetCal.toInt()} cal",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text = "P: ${presetProtein.toInt()}g • C: ${presetCarbs.toInt()}g • F: ${presetFat.toInt()}g",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Button(
+                                            onClick = { mealToLogPreset = meal },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier
+                                                .height(36.dp)
+                                                .testTag("preset_meal_log_button_${meal.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Add,
+                                                contentDescription = "Log Preset",
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Log", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                                        }
+
+                                        IconButton(
+                                            onClick = { viewModel.deleteFavoriteMeal(meal) },
+                                            modifier = Modifier.testTag("preset_meal_delete_button_${meal.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Delete Preset",
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+

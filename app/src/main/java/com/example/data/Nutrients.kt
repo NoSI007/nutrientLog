@@ -1,5 +1,10 @@
 package com.example.data
 
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
 enum class NutrientGroup(val displayName: String) {
     MACROS("Macronutrients"),
     LIPIDS("Fats & Cholesterol"),
@@ -19,7 +24,9 @@ data class NutrientDefinition(
 )
 
 object Nutrients {
-    val DEFINITIONS = listOf(
+    private const val DB_FILE_NAME = "nutrients_database.json"
+
+    val DEFAULT_DEFINITIONS = listOf(
         // Macronutrients (6)
         NutrientDefinition("calories", "Calories", NutrientGroup.MACROS, 2000.0, "kcal", description = "Energy required for daily cellular metabolic functions"),
         NutrientDefinition("carbohydrates", "Carbohydrates", NutrientGroup.MACROS, 275.0, "g", description = "Primary fast-acting energy source for muscles and brain"),
@@ -72,7 +79,80 @@ object Nutrients {
         NutrientDefinition("iodine", "Iodine", NutrientGroup.OTHERS, 150.0, "mcg", description = "Essential component of thyroid hormones regulating metabolism")
     )
 
+    var DEFINITIONS: List<NutrientDefinition> = DEFAULT_DEFINITIONS
+
     fun getByKey(key: String): NutrientDefinition? {
         return DEFINITIONS.find { it.key == key }
+    }
+
+    // Load from JSON file or initialize it with DEFAULT_DEFINITIONS if file does not exist
+    fun loadFromDatabase(context: Context): List<NutrientDefinition> {
+        val file = File(context.filesDir, DB_FILE_NAME)
+        if (!file.exists()) {
+            saveListToDatabase(context, DEFAULT_DEFINITIONS)
+            DEFINITIONS = DEFAULT_DEFINITIONS
+            return DEFAULT_DEFINITIONS
+        }
+
+        return try {
+            val jsonString = file.readText()
+            val jsonArray = JSONArray(jsonString)
+            val parsedList = mutableListOf<NutrientDefinition>()
+            for (i in 0 until jsonArray.length()) {
+                val jsonObject = jsonArray.getJSONObject(i)
+                val key = jsonObject.getString("key")
+                val name = jsonObject.getString("name")
+                val groupStr = jsonObject.getString("group")
+                val group = NutrientGroup.valueOf(groupStr)
+                val rda = jsonObject.getDouble("rda")
+                val unit = jsonObject.getString("unit")
+                val isMaxLimit = jsonObject.optBoolean("isMaxLimit", false)
+                val description = jsonObject.optString("description", "")
+                parsedList.add(NutrientDefinition(key, name, group, rda, unit, isMaxLimit, description))
+            }
+            DEFINITIONS = parsedList
+            parsedList
+        } catch (e: Exception) {
+            android.util.Log.e("Nutrients", "Error loading JSON nutrient database, falling back to default.", e)
+            DEFINITIONS = DEFAULT_DEFINITIONS
+            DEFAULT_DEFINITIONS
+        }
+    }
+
+    // Save list to database
+    fun saveListToDatabase(context: Context, list: List<NutrientDefinition>) {
+        try {
+            val jsonArray = JSONArray()
+            for (def in list) {
+                val jsonObject = JSONObject().apply {
+                    put("key", def.key)
+                    put("name", def.name)
+                    put("group", def.group.name)
+                    put("rda", def.rda)
+                    put("unit", def.unit)
+                    put("isMaxLimit", def.isMaxLimit)
+                    put("description", def.description)
+                }
+                jsonArray.put(jsonObject)
+            }
+            val file = File(context.filesDir, DB_FILE_NAME)
+            file.writeText(jsonArray.toString(4))
+            DEFINITIONS = list
+        } catch (e: Exception) {
+            android.util.Log.e("Nutrients", "Error saving JSON nutrient database.", e)
+        }
+    }
+
+    // Set or update standard/RDA value for a nutrient key in the JSON-based database
+    fun updateRda(context: Context, key: String, newRda: Double) {
+        val currentList = loadFromDatabase(context).map {
+            if (it.key == key) it.copy(rda = newRda) else it
+        }
+        saveListToDatabase(context, currentList)
+    }
+
+    // Reset database file to system defaults
+    fun resetToDefaults(context: Context) {
+        saveListToDatabase(context, DEFAULT_DEFINITIONS)
     }
 }

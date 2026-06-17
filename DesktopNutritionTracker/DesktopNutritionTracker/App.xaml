@@ -1,0 +1,8 @@
+<Application x:Class="DesktopNutritionTracker.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+         <!-- Global styling or colors can be configured here -->
+    </Application.Resources>
+</Application>

@@ -1,0 +1,92 @@
+<UserControl x:Class="DesktopNutritionTracker.Controls.MacroDonutChart"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             mc:Ignorable="d" 
+             d:DesignHeight="140" d:DesignWidth="360"
+             SizeChanged="OnSizeChanged">
+    
+    <Grid Background="Transparent">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="1.1*"/> <!-- Chart segment -->
+            <ColumnDefinition Width="1.2*"/>   <!-- Legend segment -->
+        </Grid.ColumnDefinitions>
+
+        <!-- Left side: Donut circle canvas + center label -->
+        <Grid Grid.Column="0" Margin="10,5,10,5">
+            <Canvas x:Name="ChartCanvas" ClipToBounds="True"/>
+            
+            <!-- Overlay in center of donut hole -->
+            <Border Width="56" Height="56" CornerRadius="28" Background="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="4" ShadowDepth="1" Opacity="0.1"/>
+                </Border.Effect>
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock x:Name="CenterLabelTitle" Text="Macros" FontSize="10" FontWeight="Bold" Foreground="#6B7280" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="CenterLabelValue" Text="0 g" FontSize="11" FontWeight="Bold" Foreground="#111827" HorizontalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Right side: Legend and metrics list -->
+        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="5,0,10,0">
+            <!-- Carb Item -->
+            <Border Background="#FFFBEB" BorderBrush="#FEF3C7" BorderThickness="1" CornerRadius="6" Padding="8,4" Margin="0,0,0,5">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/> <!-- Color dot -->
+                        <ColumnDefinition Width="*"/>    <!-- Text label -->
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Background="#D97706" Width="8" Height="8" CornerRadius="4" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <Grid Grid.Column="1" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Carbohydrates" FontSize="9" Foreground="#4B5563" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" x:Name="LegendCarbText" Text="0g (0%)" FontSize="10" Foreground="#1F2937" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <!-- Protein Item -->
+            <Border Background="#ECFDF5" BorderBrush="#D1FAE5" BorderThickness="1" CornerRadius="6" Padding="8,4" Margin="0,0,0,5">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/> <!-- Color dot -->
+                        <ColumnDefinition Width="*"/>    <!-- Text label -->
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Background="#059669" Width="8" Height="8" CornerRadius="4" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <Grid Grid.Column="1" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Protein" FontSize="9" Foreground="#4B5563" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" x:Name="LegendProteinText" Text="0g (0%)" FontSize="10" Foreground="#1F2937" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <!-- Fat Item -->
+            <Border Background="#FEF2F2" BorderBrush="#FEE2E2" BorderThickness="1" CornerRadius="6" Padding="8,4">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/> <!-- Color dot -->
+                        <ColumnDefinition Width="*"/>    <!-- Text label -->
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Background="#DC2626" Width="8" Height="8" CornerRadius="4" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <Grid Grid.Column="1" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Total Fat" FontSize="9" Foreground="#4B5563" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" x:Name="LegendFatText" Text="0g (0%)" FontSize="10" Foreground="#1F2937" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </Grid>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </Grid>
+</UserControl>
