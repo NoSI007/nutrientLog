@@ -24,11 +24,76 @@ class FoodRepository(private val context: Context) {
     private val dao = database.foodLogDao()
     private val supplementDao = database.supplementDao()
     private val favoriteMealDao = database.favoriteMealDao()
+    private val favoriteFoodDao = database.favoriteFoodDao()
+    private val nutrientDao = database.nutrientDao()
+    private val usdaCacheService = UsdaCacheService(context)
     private val autoLogMutex = Mutex()
+
+    init {
+        FirestoreService.initialize(context)
+    }
+
+    suspend fun deleteAllEntriesLocalOnly() = withContext(Dispatchers.IO) {
+        dao.deleteAllEntries()
+    }
+
+    suspend fun insertEntriesLocalOnly(entries: List<FoodLogEntry>) = withContext(Dispatchers.IO) {
+        dao.insertEntries(entries)
+    }
 
     val allEntries: Flow<List<FoodLogEntry>> = dao.getAllEntries()
     val allSupplements: Flow<List<Supplement>> = supplementDao.getAllSupplements()
     val allFavoriteMeals: Flow<List<FavoriteMeal>> = favoriteMealDao.getAllFavoriteMeals()
+    val allFavoriteFoods: Flow<List<FavoriteFood>> = favoriteFoodDao.getAllFavoriteFoods()
+    val allNutrients: Flow<List<NutrientEntity>> = nutrientDao.getAllNutrientsFlow()
+
+    suspend fun insertFavoriteFood(food: FavoriteFood) = withContext(Dispatchers.IO) {
+        favoriteFoodDao.insertFavoriteFood(food)
+    }
+
+    suspend fun deleteFavoriteFood(food: FavoriteFood) = withContext(Dispatchers.IO) {
+        favoriteFoodDao.deleteFavoriteFood(food)
+    }
+
+    suspend fun deleteFavoriteFoodById(id: Int) = withContext(Dispatchers.IO) {
+        favoriteFoodDao.deleteFavoriteFoodById(id)
+    }
+
+    suspend fun getFavoriteFoodByName(name: String): FavoriteFood? = withContext(Dispatchers.IO) {
+        favoriteFoodDao.getFavoriteFoodByName(name)
+    }
+
+    suspend fun getNutrientsDirect(): List<NutrientEntity> = withContext(Dispatchers.IO) {
+        nutrientDao.getAllNutrients()
+    }
+
+    suspend fun ensureNutrientsSeeded() = withContext(Dispatchers.IO) {
+        val existing = nutrientDao.getAllNutrients()
+        if (existing.isEmpty()) {
+            val entities = Nutrients.DEFAULT_DEFINITIONS.map { def ->
+                NutrientEntity(
+                    key = def.key,
+                    name = def.name,
+                    group = def.group,
+                    rda = def.rda,
+                    unit = def.unit,
+                    isMaxLimit = def.isMaxLimit,
+                    description = def.description
+                )
+            }
+            nutrientDao.insertNutrients(entities)
+            Log.i("FoodRepository", "Seeded 41 essential nutrients into standard schema table successfully.")
+        }
+    }
+
+    suspend fun updateNutrientRda(key: String, newRda: Double) = withContext(Dispatchers.IO) {
+        nutrientDao.updateRda(key, newRda)
+    }
+
+    suspend fun resetNutrientsToDefault() = withContext(Dispatchers.IO) {
+        nutrientDao.deleteAll()
+        ensureNutrientsSeeded()
+    }
 
     suspend fun insertFavoriteMeal(meal: FavoriteMeal) = withContext(Dispatchers.IO) {
         favoriteMealDao.insertFavoriteMeal(meal)
@@ -106,10 +171,17 @@ class FoodRepository(private val context: Context) {
             val entries = adapter.fromJson(cleanJson)
             if (entries != null) {
                 var count = 0
+                val insertedEntries = mutableListOf<FoodLogEntry>()
                 for (entry in entries) {
                     val cleanEntry = entry.copy(id = 0)
-                    dao.insertEntry(cleanEntry)
+                    val newId = dao.insertEntry(cleanEntry)
+                    insertedEntries.add(cleanEntry.copy(id = newId.toInt()))
                     count++
+                }
+                try {
+                    FirestoreService.saveAllFoodLogEntries(insertedEntries)
+                } catch (e: Exception) {
+                    Log.e("FoodRepository", "Firestore import batch save failed", e)
                 }
                 Result.success(count)
             } else {
@@ -125,20 +197,42 @@ class FoodRepository(private val context: Context) {
         return dao.getEntriesForDate(dateString)
     }
 
-    suspend fun insertEntry(entry: FoodLogEntry) = withContext(Dispatchers.IO) {
-        dao.insertEntry(entry)
+    suspend fun insertEntry(entry: FoodLogEntry): FoodLogEntry = withContext(Dispatchers.IO) {
+        val newId = dao.insertEntry(entry)
+        val entryWithId = if (entry.id == 0) entry.copy(id = newId.toInt()) else entry
+        try {
+            FirestoreService.saveFoodLogEntry(entryWithId)
+        } catch (e: Exception) {
+            Log.e("FoodRepository", "Firestore sync failed on insertEntry", e)
+        }
+        entryWithId
     }
 
     suspend fun deleteEntry(entry: FoodLogEntry) = withContext(Dispatchers.IO) {
         dao.deleteEntry(entry)
+        try {
+            FirestoreService.deleteFoodLogEntry(entry.id)
+        } catch (e: Exception) {
+            Log.e("FoodRepository", "Firestore sync failed on deleteEntry", e)
+        }
     }
 
     suspend fun deleteEntryById(id: Int) = withContext(Dispatchers.IO) {
         dao.deleteEntryById(id)
+        try {
+            FirestoreService.deleteFoodLogEntry(id)
+        } catch (e: Exception) {
+            Log.e("FoodRepository", "Firestore sync failed on deleteEntryById", e)
+        }
     }
 
     suspend fun deleteEntriesForDate(dateString: String) = withContext(Dispatchers.IO) {
         dao.deleteEntriesForDate(dateString)
+        try {
+            FirestoreService.deleteEntriesForDate(dateString)
+        } catch (e: Exception) {
+            Log.e("FoodRepository", "Firestore sync failed on deleteEntriesForDate", e)
+        }
     }
 
     private val okHttpClient = OkHttpClient.Builder()
@@ -162,16 +256,12 @@ class FoodRepository(private val context: Context) {
         val sharedPrefs = context.getSharedPreferences("nutrition_targets", Context.MODE_PRIVATE)
         val customApiKey = sharedPrefs.getString("usda_api_key", null)?.takeIf { it.isNotBlank() }
 
-        val apiKey = try {
-            com.example.BuildConfig.GEMINI_API_KEY
-        } catch (e: Throwable) {
-            ""
-        }
+        val apiKey = GeminiAuthHandler.getApiKey()
 
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
+        if (apiKey.isEmpty()) {
             Log.w("FoodRepository", "No valid Gemini API key found, attempting USDA API automatic lookup.")
             try {
-                val searchResults = NutritionApiIntegration.searchUsda(cleanInput, customApiKey)
+                val searchResults = usdaCacheService.searchFoods(cleanInput, customApiKey)
                 if (searchResults.isNotEmpty()) {
                     val bestMatch = searchResults.first()
                     val entry = FoodLogEntry(
@@ -199,17 +289,17 @@ class FoodRepository(private val context: Context) {
         val prompt = compilePrompt(foodInput)
         val jsonRequest = buildRequestBodyJson(prompt)
 
-        val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-            .post(jsonRequest.toRequestBody("application/json".toMediaType()))
-            .build()
+        val request = GeminiAuthHandler.buildRequest(
+            "gemini-3.5-flash:generateContent",
+            jsonRequest
+        )
 
         try {
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 Log.e("FoodRepository", "Gemini API error code: ${response.code}. Attempting USDA API lookup fallback.")
                 try {
-                    val searchResults = NutritionApiIntegration.searchUsda(cleanInput, customApiKey)
+                    val searchResults = usdaCacheService.searchFoods(cleanInput, customApiKey)
                     if (searchResults.isNotEmpty()) {
                         val bestMatch = searchResults.first()
                         val entry = FoodLogEntry(
@@ -240,7 +330,7 @@ class FoodRepository(private val context: Context) {
             } else {
                 Log.e("FoodRepository", "Payload parsing error. Attempting USDA API lookup fallback.")
                 try {
-                    val searchResults = NutritionApiIntegration.searchUsda(cleanInput, customApiKey)
+                    val searchResults = usdaCacheService.searchFoods(cleanInput, customApiKey)
                     if (searchResults.isNotEmpty()) {
                         val bestMatch = searchResults.first()
                         val entry = FoodLogEntry(
@@ -265,7 +355,7 @@ class FoodRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e("FoodRepository", "Gemini API query execution failed: ${e.message}. Attempting USDA API lookup fallback.", e)
             try {
-                val searchResults = NutritionApiIntegration.searchUsda(cleanInput, customApiKey)
+                val searchResults = usdaCacheService.searchFoods(cleanInput, customApiKey)
                 if (searchResults.isNotEmpty()) {
                     val bestMatch = searchResults.first()
                     val entry = FoodLogEntry(
@@ -687,13 +777,9 @@ class FoodRepository(private val context: Context) {
         bulkInput: String,
         anchorDate: String
     ): Result<List<FoodLogEntry>> = withContext(Dispatchers.IO) {
-        val apiKey = try {
-            com.example.BuildConfig.GEMINI_API_KEY
-        } catch (e: Throwable) {
-            ""
-        }
+        val apiKey = GeminiAuthHandler.getApiKey()
 
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
+        if (apiKey.isEmpty()) {
             Log.w("FoodRepository", "No valid Gemini API key found, utilizing local fallback multi-day analyzer.")
             val fallbackEntries = parseMultiDayOffline(bulkInput, anchorDate)
             for (entry in fallbackEntries) {
@@ -705,10 +791,10 @@ class FoodRepository(private val context: Context) {
         val prompt = compileMultiDayPrompt(bulkInput, anchorDate)
         val jsonRequest = buildRequestBodyJson(prompt)
 
-        val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-            .post(jsonRequest.toRequestBody("application/json".toMediaType()))
-            .build()
+        val request = GeminiAuthHandler.buildRequest(
+            "gemini-3.5-flash:generateContent",
+            jsonRequest
+        )
 
         try {
             val response = okHttpClient.newCall(request).execute()
@@ -990,7 +1076,10 @@ class FoodRepository(private val context: Context) {
     }
 
     suspend fun insertSupplement(supplement: Supplement) = withContext(Dispatchers.IO) {
-        supplementDao.insertSupplement(supplement)
+        val standardized = supplement.copy(
+            nutrients = standardizeNutrientKeys(supplement.nutrients)
+        )
+        supplementDao.insertSupplement(standardized)
     }
 
     suspend fun deleteSupplement(supplement: Supplement) = withContext(Dispatchers.IO) {
@@ -1033,7 +1122,7 @@ class FoodRepository(private val context: Context) {
                 var count = 0
                 for (supp in supplements) {
                     val cleanSupp = supp.copy(id = 0)
-                    supplementDao.insertSupplement(cleanSupp)
+                    insertSupplement(cleanSupp)
                     count++
                 }
                 Result.success(count)
@@ -1100,7 +1189,7 @@ class FoodRepository(private val context: Context) {
 
                     if (!alreadyLogged) {
                         val calculatedNutrients = if (supplement.nutrients.isNotEmpty()) {
-                            supplement.nutrients
+                            standardizeNutrientKeys(supplement.nutrients)
                         } else {
                             estimateSupplementNutrients(supplement.name, supplement.dosage)
                         }
@@ -1112,7 +1201,7 @@ class FoodRepository(private val context: Context) {
                             mealType = "Supplement",
                             quantity = 1.0,
                             unit = "serving",
-                            nutrients = calculatedNutrients
+                            nutrients = standardizeNutrientKeys(calculatedNutrients)
                         )
 
                         dao.insertEntry(newLog)
@@ -1195,7 +1284,7 @@ class FoodRepository(private val context: Context) {
             accumulated["vitamin_b12"] = if (parsedValueNumeric > 0.0) parsedValueNumeric else 1000.0
         } else if (lower.contains("folate") || lower.contains("folic")) {
             accumulated["folate"] = if (parsedValueNumeric > 0.0) parsedValueNumeric else 400.0
-        } else if (lower.contains("multivitamin")) {
+        } else if (lower.contains("multivitamin") || lower.contains("multi") || lower.contains("max") || lower.contains("supp")) {
             accumulated["vitamin_a"] = 900.0
             accumulated["vitamin_c"] = 90.0
             accumulated["vitamin_d"] = 15.0
@@ -1311,17 +1400,35 @@ class FoodRepository(private val context: Context) {
         }
 
         val isNumeric = barcode.trim().all { it.isDigit() }
+        if (isNumeric) {
+            try {
+                val usdaResults = usdaCacheService.searchFoods(barcode)
+                if (usdaResults.isNotEmpty()) {
+                    val result = usdaResults.first()
+                    val entry = FoodLogEntry(
+                        id = 0,
+                        date = date,
+                        foodName = "${result.name} (Scanned)",
+                        mealType = mealType,
+                        quantity = quantity,
+                        unit = result.servingSizeUnit.ifBlank { "serving" },
+                        nutrients = result.nutrients
+                    )
+                    dao.insertEntry(entry)
+                    return@withContext Result.success(entry)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("FoodRepository", "USDA Barcode database lookup failed: ${e.message}", e)
+            }
+        }
+
         if (!isNumeric) {
             return@withContext parseAndLogFood(barcode, date, mealType)
         }
 
-        val apiKey = try {
-            com.example.BuildConfig.GEMINI_API_KEY
-        } catch (e: Throwable) {
-            ""
-        }
+        val apiKey = GeminiAuthHandler.getApiKey()
 
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
+        if (apiKey.isEmpty()) {
             val entryName = "Scanned Product: $barcode"
             val fallbackEntry = createFallbackEntry(entryName, date, mealType).copy(quantity = quantity)
             dao.insertEntry(fallbackEntry)
@@ -1331,10 +1438,10 @@ class FoodRepository(private val context: Context) {
         val prompt = compilePrompt("scanned food or supplement product UPC barcode $barcode")
         val jsonRequest = buildRequestBodyJson(prompt)
 
-        val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-            .post(jsonRequest.toRequestBody("application/json".toMediaType()))
-            .build()
+        val request = GeminiAuthHandler.buildRequest(
+            "gemini-3.5-flash:generateContent",
+            jsonRequest
+        )
 
         try {
             val response = okHttpClient.newCall(request).execute()
@@ -1405,8 +1512,8 @@ class FoodRepository(private val context: Context) {
             return@withContext Result.success(supplement)
         }
 
-        val apiKey = try { com.example.BuildConfig.GEMINI_API_KEY } catch (e: Throwable) { "" }
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || apiKey == "GEMINI_API_KEY") {
+        val apiKey = GeminiAuthHandler.getApiKey()
+        if (apiKey.isEmpty()) {
             val supplement = Supplement(
                 name = "Multivitamin ($barcode)",
                 dosage = "1 tablet",
@@ -1428,10 +1535,10 @@ class FoodRepository(private val context: Context) {
         """.trimIndent()
 
         val jsonRequest = buildRequestBodyJson(templatePrompt)
-        val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-            .post(jsonRequest.toRequestBody("application/json".toMediaType()))
-            .build()
+        val request = GeminiAuthHandler.buildRequest(
+            "gemini-3.5-flash:generateContent",
+            jsonRequest
+        )
 
         try {
             val response = okHttpClient.newCall(request).execute()
@@ -1504,6 +1611,98 @@ class FoodRepository(private val context: Context) {
             supplementDao.insertSupplement(supp)
             return@withContext Result.success(supp)
         }
+    }
+
+    fun standardizeNutrientKey(rawKey: String): String {
+        val normalized = rawKey.lowercase().replace("_", " ").replace("-", " ").trim()
+        
+        return when {
+            // Calories
+            normalized.startsWith("calorie") || normalized == "kcal" || normalized == "energy" -> "calories"
+            
+            // Macronutrients
+            normalized.startsWith("carb") || normalized == "carbohydrate" -> "carbohydrates"
+            normalized == "protein" || normalized.startsWith("protein") -> "protein"
+            normalized == "fat" || normalized == "total fat" || normalized.startsWith("total fat") || normalized.startsWith("fat") -> "fat"
+            normalized == "fiber" || normalized.startsWith("dietary fiber") || normalized.startsWith("fiber") -> "fiber"
+            normalized == "water" || normalized.startsWith("hydration") || normalized.startsWith("water") -> "water"
+            
+            // Lipids
+            normalized.startsWith("saturated fat") || normalized.contains("saturated fat") -> "saturated_fat"
+            normalized.startsWith("trans fat") || normalized.contains("trans fat") -> "trans_fat"
+            normalized.startsWith("monounsaturated fat") || normalized.contains("monounsaturated") -> "monounsaturated_fat"
+            normalized.startsWith("polyunsaturated fat") || normalized.contains("polyunsaturated") -> "polyunsaturated_fat"
+            normalized.contains("omega 3") || normalized.contains("omega3") || normalized.contains("n 3") -> "omega3"
+            normalized.contains("omega 6") || normalized.contains("omega6") || normalized.contains("n 6") -> "omega6"
+            normalized == "cholesterol" || normalized.startsWith("cholesterol") -> "cholesterol"
+            
+            // Vitamins
+            normalized.startsWith("vitamin a") || normalized.startsWith("vit a") || normalized.startsWith("retinol") -> "vitamin_a"
+            normalized.startsWith("vitamin c") || normalized.startsWith("vit c") || normalized.startsWith("ascorbic") -> "vitamin_c"
+            normalized.startsWith("vitamin d") || normalized.startsWith("vit d") || normalized.contains("d3") || normalized.startsWith("calciferol") || normalized.contains("cholecalciferol") -> "vitamin_d"
+            normalized.startsWith("vitamin e") || normalized.startsWith("vit e") || normalized.contains("tocopherol") -> "vitamin_e"
+            normalized.startsWith("vitamin k") || normalized.startsWith("vit k") || normalized.contains("k1") || normalized.contains("k2") || normalized.startsWith("phylloquinone") || normalized.startsWith("menaquinone") -> "vitamin_k"
+            normalized.startsWith("vitamin b12") || normalized.contains("b12") || normalized.contains("cobalamin") || normalized.contains("cyanocobalamin") || normalized.contains("methylcobalamin") -> "vitamin_b12"
+            normalized.startsWith("thiamin") || normalized.contains("vitamin b1") || normalized.contains("b1") -> "thiamin"
+            normalized.startsWith("riboflavin") || normalized.contains("vitamin b2") || normalized.contains("b2") -> "riboflavin"
+            normalized.startsWith("niacin") || normalized.contains("vitamin b3") || normalized.contains("b3") || normalized.contains("nicotinic") || normalized.contains("niacinamide") -> "niacin"
+            normalized.startsWith("pantothenic") || normalized.contains("vitamin b5") || normalized.contains("b5") || normalized.contains("pantothenate") -> "pantothenic_acid"
+            normalized.startsWith("vitamin b6") || normalized.contains("b6") || normalized.contains("pyridoxine") || normalized.contains("pyridoxal") -> "vitamin_b6"
+            normalized.startsWith("biotin") || normalized.contains("b7") || normalized.contains("vitamin h") -> "biotin"
+            normalized.startsWith("folic") || normalized.contains("folate") || normalized.contains("b9") -> "folate"
+            normalized == "choline" || normalized.startsWith("choline") -> "choline"
+            
+            // Minerals
+            normalized.startsWith("calcium") -> "calcium"
+            normalized.startsWith("iron") -> "iron"
+            normalized.startsWith("magnesium") -> "magnesium"
+            normalized.startsWith("phosphorus") -> "phosphorus"
+            normalized.startsWith("potassium") -> "potassium"
+            normalized.startsWith("sodium") -> "sodium"
+            normalized.startsWith("zinc") -> "zinc"
+            normalized.startsWith("copper") -> "copper"
+            normalized.startsWith("manganese") -> "manganese"
+            normalized.startsWith("selenium") -> "selenium"
+            normalized.startsWith("chromium") -> "chromium"
+            normalized.startsWith("molybdenum") -> "molybdenum"
+            normalized.startsWith("iodine") -> "iodine"
+            
+            // Others
+            normalized.startsWith("sugar") -> "sugars"
+            
+            // Fallback: keep original clean lower key if it matches any standard key directly
+            else -> {
+                val dbMatch = com.example.data.Nutrients.DEFAULT_DEFINITIONS.find { it.key == rawKey }
+                dbMatch?.key ?: rawKey
+            }
+        }
+    }
+
+    fun standardizeNutrientKeys(rawNutrients: Map<String, Double>): Map<String, Double> {
+        val isMultiMax = rawNutrients.keys.any { key ->
+            key.any { it.isUpperCase() } && (key.contains("µg") || key.contains("mg") || key.contains("mcg") || key.contains("("))
+        }
+        if (isMultiMax) {
+            val logMsg = "Multi-Max data flow detected: Raw keys: ${rawNutrients.keys}"
+            android.util.Log.d("NutritionRepository", logMsg)
+            println("[NutritionRepository] $logMsg")
+        }
+        val standardized = mutableMapOf<String, Double>()
+        for ((key, value) in rawNutrients) {
+            val standardizedKey = standardizeNutrientKey(key)
+            if (isMultiMax) {
+                val logItem = "Standardizing Multi-Max key: '$key' -> '$standardizedKey' (Value: $value)"
+                android.util.Log.d("NutritionRepository", logItem)
+                println("[NutritionRepository] $logItem")
+            }
+            standardized[standardizedKey] = (standardized[standardizedKey] ?: 0.0) + value
+        }
+        if (isMultiMax) {
+            val finalLogMsg = "Multi-Max standardization result: $standardized"
+            android.util.Log.d("NutritionRepository", finalLogMsg)
+            println("[NutritionRepository] $finalLogMsg")
+        }
+        return standardized
     }
 }
 

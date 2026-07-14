@@ -148,7 +148,8 @@ namespace DesktopNutritionTracker
                 double targetVal = def.Rda;
                 string customText = "";
 
-                if (overrides != null && overrides.TryGetValue(def.Key, out double ovr))
+                double ovr;
+                if (overrides != null && overrides.TryGetValue(def.Key, out ovr))
                 {
                     customText = ovr.ToString("F1");
                 }

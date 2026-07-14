@@ -19,10 +19,16 @@ interface FoodLogDao {
     fun getEntriesForDate(dateString: String): Flow<List<FoodLogEntry>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertEntry(entry: FoodLogEntry)
+    suspend fun insertEntry(entry: FoodLogEntry): Long
 
     @Delete
     suspend fun deleteEntry(entry: FoodLogEntry)
+
+    @Query("DELETE FROM food_log_entries")
+    suspend fun deleteAllEntries()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertEntries(entries: List<FoodLogEntry>)
 
     @Query("DELETE FROM food_log_entries WHERE id = :id")
     suspend fun deleteEntryById(id: Int)

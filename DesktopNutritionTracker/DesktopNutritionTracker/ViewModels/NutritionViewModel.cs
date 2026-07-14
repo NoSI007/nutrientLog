@@ -13,7 +13,22 @@ namespace DesktopNutritionTracker.ViewModels
     public class NutritionViewModel : INotifyPropertyChanged
     {
         private readonly StorageService _storageService;
+        private readonly IRdaProfileService _rdaProfileService = new RdaProfileService();
+        private readonly GeminiService _geminiService = new GeminiService();
         private StorageData _db;
+
+        private readonly INutrientNotificationService _notificationService = new NutrientNotificationService();
+        private readonly ObservableCollection<NutrientAlert> _activeNutrientAlerts = new ObservableCollection<NutrientAlert>();
+        public ObservableCollection<NutrientAlert> ActiveNutrientAlerts => _activeNutrientAlerts;
+
+        public bool HasActiveNutrientAlerts => ActiveNutrientAlerts.Any();
+
+        private bool _isAlertModalVisible = false;
+        public bool IsAlertModalVisible
+        {
+            get => _isAlertModalVisible;
+            set => SetProperty(ref _isAlertModalVisible, value);
+        }
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -210,7 +225,8 @@ namespace DesktopNutritionTracker.ViewModels
         {
             get
             {
-                if (double.TryParse(_aiQueryServingSizeText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double q) && q > 0)
+                double q;
+                if (double.TryParse(_aiQueryServingSizeText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out q) && q > 0)
                 {
                     return q;
                 }
@@ -227,6 +243,18 @@ namespace DesktopNutritionTracker.ViewModels
         public ObservableCollection<DayTrend> DayTrends { get; } = new ObservableCollection<DayTrend>();
         public ObservableCollection<CustomDailyProfile> CustomDailyProfiles { get; } = new ObservableCollection<CustomDailyProfile>();
         public ObservableCollection<FoodLogEntry> RecurringFoods { get; } = new ObservableCollection<FoodLogEntry>();
+
+        private bool _isAiPlanning;
+        public bool IsAiPlanning { get => _isAiPlanning; set => SetProperty(ref _isAiPlanning, value); }
+
+        private string _aiPlannerStatusText = "Configure usual foods and press 'PLAN WITH AI'.";
+        public string AiPlannerStatusText { get => _aiPlannerStatusText; set => SetProperty(ref _aiPlannerStatusText, value); }
+
+        private bool _hasSuggestedMenu;
+        public bool HasSuggestedMenu { get => _hasSuggestedMenu; set => SetProperty(ref _hasSuggestedMenu, value); }
+
+        public ObservableCollection<FoodLogEntry> SelectedMenuStaples { get; } = new ObservableCollection<FoodLogEntry>();
+        public ObservableCollection<FoodLogEntry> SuggestedMenuItems { get; } = new ObservableCollection<FoodLogEntry>();
 
         private string _activeProfileName = "Standard Baseline";
         public string ActiveProfileName { get => _activeProfileName; set => SetProperty(ref _activeProfileName, value); }
@@ -264,9 +292,34 @@ namespace DesktopNutritionTracker.ViewModels
             }
 
             // Clean database state initialization
-            if (_db.FoodEntries.Count == 0)
+            // Sanitize / Re-index duplicate or zero IDs to prevent SQLite PRIMARY KEY constraint violations
+            bool needsResave = false;
+            var seenIds = new HashSet<int>();
+            for (int i = 0; i < _db.FoodEntries.Count; i++)
             {
-                PrepopulateSampleLogs();
+                var entry = _db.FoodEntries[i];
+                if (entry.Id == 0 || seenIds.Contains(entry.Id))
+                {
+                    int nextId = _db.FoodEntries.Count > 0 ? _db.FoodEntries.Max(f => f.Id) + 1 : 1;
+                    if (nextId <= 0) nextId = 1;
+                    entry.Id = nextId;
+                    needsResave = true;
+                }
+                seenIds.Add(entry.Id);
+            }
+            if (needsResave)
+            {
+                _storageService.Save(_db);
+            }
+
+            if (!_db.HasPrepopulatedSampleLogs)
+            {
+                if (_db.FoodEntries.Count == 0)
+                {
+                    PrepopulateSampleLogs();
+                }
+                _db.HasPrepopulatedSampleLogs = true;
+                _storageService.Save(_db);
             }
 
             // Populate RecurringFoods matching database state
@@ -301,6 +354,27 @@ namespace DesktopNutritionTracker.ViewModels
 
             // Refresh advanced weekly/monthly trends
             Trends?.RefreshTrends();
+
+            // Update Nutrient Alerts (silently on simple load/refresh)
+            CheckNutrientAlerts(autoShow: false);
+        }
+
+        public void CheckNutrientAlerts(bool autoShow = false)
+        {
+            _activeNutrientAlerts.Clear();
+            var alerts = _notificationService.EvaluateDailyNutrients(NutrientStatuses);
+            foreach (var alert in alerts)
+            {
+                _activeNutrientAlerts.Add(alert);
+            }
+
+            NotifyPropertyChanged(nameof(ActiveNutrientAlerts));
+            NotifyPropertyChanged(nameof(HasActiveNutrientAlerts));
+
+            if (autoShow && alerts.Any())
+            {
+                IsAlertModalVisible = true;
+            }
         }
 
         private void ComputeNutrientIntakes()
@@ -322,8 +396,10 @@ namespace DesktopNutritionTracker.ViewModels
                     targetRda = _db.CustomRdaOverrides[def.Key];
                 }
 
-                double intake = dailyEntry.Nutrients.TryGetValue(def.Key, out double val) ? val : 0.0;
-                double percentage = percentages.TryGetValue(def.Key, out double pct) ? pct : 0.0;
+                double val;
+                double intake = dailyEntry.Nutrients.TryGetValue(def.Key, out val) ? val : 0.0;
+                double pct;
+                double percentage = percentages.TryGetValue(def.Key, out pct) ? pct : 0.0;
 
                 // Determine Health status indicator color (Red, Yellow, Green)
                 StatusColor status = StatusColor.YELLOW;
@@ -357,7 +433,8 @@ namespace DesktopNutritionTracker.ViewModels
             DayTrends.Clear();
 
             // Compile logs for the last 7 days leading up to CurrentDateString
-            if (DateTime.TryParse(CurrentDateString, out var centerDate))
+            DateTime centerDate;
+            if (DateTime.TryParse(CurrentDateString, out centerDate))
             {
                 var days = new List<DateTime>();
                 for (int i = 6; i >= 0; i--)
@@ -418,6 +495,7 @@ namespace DesktopNutritionTracker.ViewModels
             _storageService.Save(_db);
             
             RefreshTodayData();
+            CheckNutrientAlerts(autoShow: true);
             OperationMessage = $"Successfully logged '{foodName}' for {mealType}!";
         }
 
@@ -435,7 +513,7 @@ namespace DesktopNutritionTracker.ViewModels
 
             try
             {
-                parsedResult = await GeminiService.ParseFoodWithAiAsync(foodName);
+                parsedResult = await _geminiService.ParseFoodWithAiAsync(foodName);
                 if (parsedResult != null)
                 {
                     usedAi = true;
@@ -502,6 +580,7 @@ namespace DesktopNutritionTracker.ViewModels
             _storageService.Save(_db);
             
             RefreshTodayData();
+            CheckNutrientAlerts(autoShow: true);
 
             if (usedAi)
             {
@@ -526,11 +605,25 @@ namespace DesktopNutritionTracker.ViewModels
         // Delete logged food item
         public void DeleteFoodLog(FoodLogEntry entry)
         {
+            if (entry == null) return;
             _lastDeletedEntry = entry;
-            _db.FoodEntries.Remove(entry);
+            
+            var match = _db.FoodEntries.FirstOrDefault(f => f.Id == entry.Id);
+            if (match != null)
+            {
+                _db.FoodEntries.Remove(match);
+            }
+            else
+            {
+                _db.FoodEntries.Remove(entry);
+            }
+
+            // Explicitly recreate the food log list in memory to clear stale references/entries
+            _db.FoodEntries = new List<FoodLogEntry>(_db.FoodEntries);
             _storageService.Save(_db);
             
             RefreshTodayData();
+            NotifyPropertyChanged(nameof(Database));
             OperationMessage = $"Deleted {entry.FoodName}.";
         }
 
@@ -540,10 +633,14 @@ namespace DesktopNutritionTracker.ViewModels
             if (_lastDeletedEntry != null)
             {
                 _db.FoodEntries.Add(_lastDeletedEntry);
+                
+                // Explicitly recreate the food log list in memory
+                _db.FoodEntries = new List<FoodLogEntry>(_db.FoodEntries);
                 _storageService.Save(_db);
                 _lastDeletedEntry = null;
                 
                 RefreshTodayData();
+                NotifyPropertyChanged(nameof(Database));
                 OperationMessage = "Restored logged item.";
             }
         }
@@ -575,7 +672,10 @@ namespace DesktopNutritionTracker.ViewModels
         // Multiplier & Custom Biological standard Profiler Trigger
         public void ApplyRdaProfile(int age, string activityLevel, string sex)
         {
-            // Main macro calculations matching Android Kotlin exactly
+            // 1. Seed/apply the 41 essential nutrient clinical RDA values based on matched age and sex category
+            _rdaProfileService.ApplyRdaProfileToOverrides(age, sex, _db.CustomRdaOverrides);
+
+            // 2. Perform dynamic metabolic and activity adjustments on top of the clinical baseline
             double baseCalories = (sex == "Male")
                 ? (age < 30 ? 2400.0 : (age < 51 ? 2200.0 : 2000.0))
                 : (age < 30 ? 2000.0 : (age < 51 ? 1800.0 : 1600.0));
@@ -685,6 +785,7 @@ namespace DesktopNutritionTracker.ViewModels
 
             _storageService.Save(_db);
             RefreshTodayData();
+            CheckNutrientAlerts(autoShow: true);
         }
 
         public bool IsSupplementTakenToday(Supplement sup)
@@ -895,23 +996,24 @@ namespace DesktopNutritionTracker.ViewModels
         private void PrepopulateSampleLogs()
         {
             var today = DateTime.Today;
+            int nextId = 1;
 
             // Today: Balanced day
             _db.FoodEntries.Add(new FoodLogEntry(
                 today.ToString("yyyy-MM-dd"),
                 "Greek yogurt with honey and chia seeds",
                 "Breakfast", 1.0, "serving", CreateFallbackEntry("greek yogurt chia honey")
-            ));
+            ) { Id = nextId++ });
             _db.FoodEntries.Add(new FoodLogEntry(
                 today.ToString("yyyy-MM-dd"),
                 "Grilled chicken breast, brown rice and broccoli",
                 "Lunch", 1.0, "serving", CreateFallbackEntry("grilled chicken brown rice broccoli")
-            ));
+            ) { Id = nextId++ });
             _db.FoodEntries.Add(new FoodLogEntry(
                 today.ToString("yyyy-MM-dd"),
                 "Baked salmon with spinach salad",
                 "Dinner", 1.0, "serving", CreateFallbackEntry("baked salmon spinach salad")
-            ));
+            ) { Id = nextId++ });
 
             // Yesterday: High-sodium, low vitamin day
             var yesterday = today.AddDays(-1);
@@ -925,7 +1027,7 @@ namespace DesktopNutritionTracker.ViewModels
                 yesterday.ToString("yyyy-MM-dd"),
                 "Double bacon cheeseburger",
                 "Lunch", 1.0, "serving", burgerNutrients
-            ));
+            ) { Id = nextId++ });
 
             var friesNutrients = CreateFallbackEntry("fries and soda");
             friesNutrients["sodium"] = 800.0;
@@ -936,7 +1038,7 @@ namespace DesktopNutritionTracker.ViewModels
                 yesterday.ToString("yyyy-MM-dd"),
                 "French fries and regular soda",
                 "Snack", 1.0, "serving", friesNutrients
-            ));
+            ) { Id = nextId++ });
 
             // 2 Days Ago: Light hydration, low-iron day
             var twoDaysAgo = today.AddDays(-2);
@@ -944,12 +1046,12 @@ namespace DesktopNutritionTracker.ViewModels
                 twoDaysAgo.ToString("yyyy-MM-dd"),
                 "Oatmeal with sliced banana",
                 "Breakfast", 1.0, "serving", CreateFallbackEntry("oatmeal banana")
-            ));
+            ) { Id = nextId++ });
             _db.FoodEntries.Add(new FoodLogEntry(
                 twoDaysAgo.ToString("yyyy-MM-dd"),
                 "Garden salad with olive oil",
                 "Lunch", 1.0, "serving", CreateFallbackEntry("salad garden lettuce olive oil")
-            ));
+            ) { Id = nextId++ });
 
             _storageService.Save(_db);
         }
@@ -988,7 +1090,8 @@ namespace DesktopNutritionTracker.ViewModels
                 foreach (var def in Nutrients.Definitions)
                 {
                     double value = 0.0;
-                    if (entry.Nutrients != null && entry.Nutrients.TryGetValue(def.Key, out double rawVal))
+                    double rawVal;
+                    if (entry.Nutrients != null && entry.Nutrients.TryGetValue(def.Key, out rawVal))
                     {
                         value = rawVal * entry.Quantity;
                     }
@@ -1180,6 +1283,402 @@ namespace DesktopNutritionTracker.ViewModels
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Generates a beautifully designed responsive HTML report of the current daily nutrition tracking data.
+        /// </summary>
+        public string GenerateHtmlReport()
+        {
+            var sb = new System.Text.StringBuilder();
+
+            sb.AppendLine("<!DOCTYPE html>");
+            sb.AppendLine("<html lang=\"en\">");
+            sb.AppendLine("<head>");
+            sb.AppendLine("    <meta charset=\"UTF-8\">");
+            sb.AppendLine("    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
+            sb.AppendLine("    <title>NutriScribe Clinical Daily Report</title>");
+            sb.AppendLine("    <style>");
+            sb.AppendLine("        :root {");
+            sb.AppendLine("            --bg-color: #0f172a;");
+            sb.AppendLine("            --card-bg: #1e293b;");
+            sb.AppendLine("            --primary: #38bdf8;");
+            sb.AppendLine("            --text: #f8fafc;");
+            sb.AppendLine("            --text-secondary: #94a3b8;");
+            sb.AppendLine("            --border: #334155;");
+            sb.AppendLine("            --success: #10b981;");
+            sb.AppendLine("            --warning: #f59e0b;");
+            sb.AppendLine("            --danger: #ef4444;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        body {");
+            sb.AppendLine("            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;");
+            sb.AppendLine("            background-color: var(--bg-color);");
+            sb.AppendLine("            color: var(--text);");
+            sb.AppendLine("            margin: 0;");
+            sb.AppendLine("            padding: 24px;");
+            sb.AppendLine("            line-height: 1.6;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .container {");
+            sb.AppendLine("            max-width: 1000px;");
+            sb.AppendLine("            margin: 0 auto;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .header {");
+            sb.AppendLine("            text-align: center;");
+            sb.AppendLine("            padding: 32px 24px;");
+            sb.AppendLine("            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);");
+            sb.AppendLine("            border: 1px solid var(--border);");
+            sb.AppendLine("            border-radius: 12px;");
+            sb.AppendLine("            margin-bottom: 24px;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .header h1 {");
+            sb.AppendLine("            margin: 0 0 8px 0;");
+            sb.AppendLine("            color: var(--primary);");
+            sb.AppendLine("            font-size: 2.2rem;");
+            sb.AppendLine("            letter-spacing: 1px;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .header p {");
+            sb.AppendLine("            margin: 0;");
+            sb.AppendLine("            color: var(--text-secondary);");
+            sb.AppendLine("            font-size: 1rem;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .meta-grid {");
+            sb.AppendLine("            display: grid;");
+            sb.AppendLine("            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));");
+            sb.AppendLine("            gap: 16px;");
+            sb.AppendLine("            margin-top: 24px;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .meta-card {");
+            sb.AppendLine("            background: rgba(255,255,255,0.03);");
+            sb.AppendLine("            border: 1px solid var(--border);");
+            sb.AppendLine("            padding: 12px 16px;");
+            sb.AppendLine("            border-radius: 8px;");
+            sb.AppendLine("            text-align: center;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .meta-card .label {");
+            sb.AppendLine("            font-size: 0.8rem;");
+            sb.AppendLine("            color: var(--text-secondary);");
+            sb.AppendLine("            text-transform: uppercase;");
+            sb.AppendLine("            margin-bottom: 4px;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .meta-card .value {");
+            sb.AppendLine("            font-size: 1.1rem;");
+            sb.AppendLine("            font-weight: bold;");
+            sb.AppendLine("            color: var(--text);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .section-card {");
+            sb.AppendLine("            background-color: var(--card-bg);");
+            sb.AppendLine("            border: 1px solid var(--border);");
+            sb.AppendLine("            border-radius: 12px;");
+            sb.AppendLine("            padding: 24px;");
+            sb.AppendLine("            margin-bottom: 24px;");
+            sb.AppendLine("            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .section-card h2 {");
+            sb.AppendLine("            margin-top: 0;");
+            sb.AppendLine("            margin-bottom: 16px;");
+            sb.AppendLine("            font-size: 1.4rem;");
+            sb.AppendLine("            border-bottom: 2px solid var(--border);");
+            sb.AppendLine("            padding-bottom: 8px;");
+            sb.AppendLine("            color: var(--primary);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        table {");
+            sb.AppendLine("            width: 100%;");
+            sb.AppendLine("            border-collapse: collapse;");
+            sb.AppendLine("            margin-top: 8px;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        th, td {");
+            sb.AppendLine("            padding: 12px 16px;");
+            sb.AppendLine("            text-align: left;");
+            sb.AppendLine("            border-bottom: 1px solid var(--border);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        th {");
+            sb.AppendLine("            background-color: rgba(255, 255, 255, 0.02);");
+            sb.AppendLine("            color: var(--text-secondary);");
+            sb.AppendLine("            font-weight: 600;");
+            sb.AppendLine("            font-size: 0.9rem;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        tr:hover {");
+            sb.AppendLine("            background-color: rgba(255, 255, 255, 0.01);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .badge {");
+            sb.AppendLine("            display: inline-block;");
+            sb.AppendLine("            padding: 4px 10px;");
+            sb.AppendLine("            border-radius: 9999px;");
+            sb.AppendLine("            font-size: 0.75rem;");
+            sb.AppendLine("            font-weight: bold;");
+            sb.AppendLine("            text-transform: uppercase;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .badge-optimal {");
+            sb.AppendLine("            background-color: rgba(16, 185, 129, 0.15);");
+            sb.AppendLine("            color: var(--success);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .badge-suboptimal {");
+            sb.AppendLine("            background-color: rgba(245, 158, 11, 0.15);");
+            sb.AppendLine("            color: var(--warning);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .badge-deficit {");
+            sb.AppendLine("            background-color: rgba(239, 68, 68, 0.15);");
+            sb.AppendLine("            color: var(--danger);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .empty-state {");
+            sb.AppendLine("            color: var(--text-secondary);");
+            sb.AppendLine("            font-style: italic;");
+            sb.AppendLine("            padding: 12px 0;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        .footer {");
+            sb.AppendLine("            text-align: center;");
+            sb.AppendLine("            padding: 24px 0;");
+            sb.AppendLine("            color: var(--text-secondary);");
+            sb.AppendLine("            font-size: 0.85rem;");
+            sb.AppendLine("            border-top: 1px solid var(--border);");
+            sb.AppendLine("            margin-top: 48px;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        @media (max-width: 640px) {");
+            sb.AppendLine("            body { padding: 12px; }");
+            sb.AppendLine("            .header h1 { font-size: 1.8rem; }");
+            sb.AppendLine("            th, td { padding: 8px 10px; font-size: 0.85rem; }");
+            sb.AppendLine("        }");
+            sb.AppendLine("    </style>");
+            sb.AppendLine("</head>");
+            sb.AppendLine("<body>");
+            sb.AppendLine("    <div class=\"container\">");
+            
+            // Header
+            sb.AppendLine("        <div class=\"header\">");
+            sb.AppendLine("            <h1>NUTRI-SCRIBE DAILY REPORT</h1>");
+            sb.AppendLine("            <p>Comprehensive Clinical Nutrition Summary & Intake Status Analysis</p>");
+            sb.AppendLine("            <div class=\"meta-grid\">");
+            sb.AppendLine($"                <div class=\"meta-card\"><div class=\"label\">Date</div><div class=\"value\">{CurrentDateString}</div></div>");
+            sb.AppendLine($"                <div class=\"meta-card\"><div class=\"label\">Biological Sex</div><div class=\"value\">{ProfileSex}</div></div>");
+            sb.AppendLine($"                <div class=\"meta-card\"><div class=\"label\">Age</div><div class=\"value\">{ProfileAge} yrs</div></div>");
+            sb.AppendLine($"                <div class=\"meta-card\"><div class=\"label\">Activity</div><div class=\"value\">{ProfileActivity}</div></div>");
+            sb.AppendLine("            </div>");
+            sb.AppendLine("        </div>");
+
+            // Section 1: Food Journal
+            sb.AppendLine("        <div class=\"section-card\">");
+            sb.AppendLine("            <h2>1. Food Journal Logs</h2>");
+            if (CurrentDayFood.Count == 0)
+            {
+                sb.AppendLine("            <p class=\"empty-state\">No food logs recorded for this date.</p>");
+            }
+            else
+            {
+                sb.AppendLine("            <table>");
+                sb.AppendLine("                <thead>");
+                sb.AppendLine("                    <tr>");
+                sb.AppendLine("                        <th>Meal Category</th>");
+                sb.AppendLine("                        <th>Description</th>");
+                sb.AppendLine("                        <th style=\"text-align: right;\">Quantity</th>");
+                sb.AppendLine("                        <th>Unit</th>");
+                sb.AppendLine("                    </tr>");
+                sb.AppendLine("                </thead>");
+                sb.AppendLine("                <tbody>");
+                foreach (var food in CurrentDayFood)
+                {
+                    sb.AppendLine("                    <tr>");
+                    sb.AppendLine($"                        <td style=\"font-weight: 500;\">{System.Net.WebUtility.HtmlEncode(food.MealType)}</td>");
+                    sb.AppendLine($"                        <td>{System.Net.WebUtility.HtmlEncode(food.FoodName)}</td>");
+                    sb.AppendLine($"                        <td style=\"text-align: right;\">{food.Quantity:F1}</td>");
+                    sb.AppendLine($"                        <td>{System.Net.WebUtility.HtmlEncode(food.Unit)}</td>");
+                    sb.AppendLine("                    </tr>");
+                }
+                sb.AppendLine("                </tbody>");
+                sb.AppendLine("            </table>");
+            }
+            sb.AppendLine("        </div>");
+
+            // Section 2: Supplements
+            sb.AppendLine("        <div class=\"section-card\">");
+            sb.AppendLine("            <h2>2. Supplement Logs</h2>");
+            var activeSups = Supplements.Where(sup => _db.TakenSupplementsForToday.Contains($"{CurrentDateString}|{sup.Name}")).ToList();
+            if (activeSups.Count == 0)
+            {
+                sb.AppendLine("            <p class=\"empty-state\">No supplements logged today.</p>");
+            }
+            else
+            {
+                sb.AppendLine("            <table>");
+                sb.AppendLine("                <thead>");
+                sb.AppendLine("                    <tr>");
+                sb.AppendLine("                        <th>Supplement Name</th>");
+                sb.AppendLine("                        <th>Dosage</th>");
+                sb.AppendLine("                        <th>Clinical Notes</th>");
+                sb.AppendLine("                    </tr>");
+                sb.AppendLine("                </thead>");
+                sb.AppendLine("                <tbody>");
+                foreach (var sup in activeSups)
+                {
+                    sb.AppendLine("                    <tr>");
+                    sb.AppendLine($"                        <td style=\"font-weight: 500;\">{System.Net.WebUtility.HtmlEncode(sup.Name)}</td>");
+                    sb.AppendLine($"                        <td>{System.Net.WebUtility.HtmlEncode(sup.Dosage)}</td>");
+                    sb.AppendLine($"                        <td style=\"color: var(--text-secondary);\">{System.Net.WebUtility.HtmlEncode(sup.Notes)}</td>");
+                    sb.AppendLine("                    </tr>");
+                }
+                sb.AppendLine("                </tbody>");
+                sb.AppendLine("            </table>");
+            }
+            sb.AppendLine("        </div>");
+
+            // Section 3: Nutrient Statuses
+            sb.AppendLine("        <div class=\"section-card\">");
+            sb.AppendLine("            <h2>3. Clinical Nutrient Status Analysis</h2>");
+            sb.AppendLine("            <table>");
+            sb.AppendLine("                <thead>");
+            sb.AppendLine("                    <tr>");
+            sb.AppendLine("                        <th>Nutrient</th>");
+            sb.AppendLine("                        <th>Category</th>");
+            sb.AppendLine("                        <th style=\"text-align: right;\">Your Intake</th>");
+            sb.AppendLine("                        <th style=\"text-align: right;\">Target RDA</th>");
+            sb.AppendLine("                        <th style=\"text-align: right;\">Met %</th>");
+            sb.AppendLine("                        <th style=\"text-align: center;\">Clinical Indicator</th>");
+            sb.AppendLine("                    </tr>");
+            sb.AppendLine("                </thead>");
+            sb.AppendLine("                <tbody>");
+            foreach (var status in NutrientStatuses)
+            {
+                string badgeClass = status.Status switch
+                {
+                    StatusColor.GREEN => "badge-optimal",
+                    StatusColor.YELLOW => "badge-suboptimal",
+                    StatusColor.RED => "badge-deficit",
+                    _ => ""
+                };
+                string statusText = status.Status switch
+                {
+                    StatusColor.GREEN => "Optimal",
+                    StatusColor.YELLOW => "Sub-Optimal",
+                    StatusColor.RED => status.Definition.IsMaxLimit ? "Limit Exceeded" : "Deficient",
+                    _ => "Unknown"
+                };
+
+                sb.AppendLine("                    <tr>");
+                sb.AppendLine($"                        <td style=\"font-weight: 500;\">{System.Net.WebUtility.HtmlEncode(status.Definition.Name)}</td>");
+                sb.AppendLine($"                        <td style=\"color: var(--text-secondary);\">{System.Net.WebUtility.HtmlEncode(status.Definition.Group.GetDisplayName())}</td>");
+                sb.AppendLine($"                        <td style=\"text-align: right;\">{status.Intake:F1} {System.Net.WebUtility.HtmlEncode(status.Definition.Unit)}</td>");
+                sb.AppendLine($"                        <td style=\"text-align: right;\">{status.Definition.Rda:F1} {System.Net.WebUtility.HtmlEncode(status.Definition.Unit)}</td>");
+                sb.AppendLine($"                        <td style=\"text-align: right; font-weight: bold;\">{status.Percentage:F1}%</td>");
+                sb.AppendLine($"                        <td style=\"text-align: center;\"><span class=\"badge {badgeClass}\">{statusText}</span></td>");
+                sb.AppendLine("                    </tr>");
+            }
+            sb.AppendLine("                </tbody>");
+            sb.AppendLine("            </table>");
+            sb.AppendLine("        </div>");
+
+            // Footer
+            sb.AppendLine("        <div class=\"footer\">");
+            sb.AppendLine($"            Report compiled by NutriScribe Daily Clinical Suite on {DateTime.Now:MMMM dd, yyyy} at {DateTime.Now:hh:mm tt}");
+            sb.AppendLine("            <br>CONFIDENTIAL - Generated directly from local medical baseline definitions. All data resides strictly on-device.");
+            sb.AppendLine("        </div>");
+            sb.AppendLine("    </div>");
+            sb.AppendLine("</body>");
+            sb.AppendLine("</html>");
+
+            return sb.ToString();
+        }
+
+        public string GenerateWeeklyHtmlReport()
+        {
+            DateTime centerDate;
+            if (!DateTime.TryParse(CurrentDateString, out centerDate))
+            {
+                centerDate = DateTime.Today;
+            }
+
+            var days = new List<DateTime>();
+            for (int i = 6; i >= 0; i--)
+            {
+                days.Add(centerDate.AddDays(-i));
+            }
+
+            string startDateStr = days.First().ToString("MMMM dd, yyyy");
+            string endDateStr = days.Last().ToString("MMMM dd, yyyy");
+
+            var dayStrings = days.Select(d => d.ToString("yyyy-MM-dd")).ToHashSet();
+            var weeklyFoodLogs = _db.FoodEntries.Where(f => dayStrings.Contains(f.Date)).ToList();
+
+            var nutrientTotals = new Dictionary<string, double>();
+            foreach (var def in Models.Nutrients.Definitions)
+            {
+                nutrientTotals[def.Key] = 0.0;
+            }
+
+            int activeDaysCount = 7;
+            foreach (var day in days)
+            {
+                string dateStr = day.ToString("yyyy-MM-dd");
+                var dailyEntry = NutritionEntry.ComputeForDate(dateStr, _db.FoodEntries, Supplements, _db.TakenSupplementsForToday);
+                foreach (var def in Models.Nutrients.Definitions)
+                {
+                    nutrientTotals[def.Key] += dailyEntry.Nutrients[def.Key];
+                }
+            }
+
+            var weeklyStatuses = new List<NutrientStatus>();
+            foreach (var def in Models.Nutrients.Definitions)
+            {
+                double avgIntake = nutrientTotals[def.Key] / activeDaysCount;
+                double targetRda = def.Rda;
+                double customVal;
+
+                if (_db.ActiveProfileName != "Standard Baseline")
+                {
+                    var activeProfile = _db.CustomDailyProfiles.FirstOrDefault(p => p.Name == _db.ActiveProfileName);
+                    if (activeProfile != null && activeProfile.Targets.TryGetValue(def.Key, out customVal))
+                    {
+                        targetRda = customVal;
+                    }
+                }
+                else if (_db.CustomRdaOverrides.TryGetValue(def.Key, out customVal))
+                {
+                    targetRda = customVal;
+                }
+
+                double percentage = 0.0;
+                if (targetRda > 0.0)
+                {
+                    percentage = (avgIntake / targetRda) * 100.0;
+                }
+
+                StatusColor status = StatusColor.GREEN;
+                if (def.IsMaxLimit)
+                {
+                    status = (avgIntake > targetRda && targetRda > 0.0) ? StatusColor.RED : StatusColor.GREEN;
+                }
+                else
+                {
+                    if (percentage < 50.0) status = StatusColor.RED;
+                    else if (percentage < 100.0) status = StatusColor.YELLOW;
+                    else status = StatusColor.GREEN;
+                }
+
+                weeklyStatuses.Add(new NutrientStatus(def, avgIntake, percentage, status));
+            }
+
+            double avgCalories = weeklyStatuses.FirstOrDefault(s => s.Definition.Key == "calories")?.Intake ?? 0.0;
+            double avgProtein = weeklyStatuses.FirstOrDefault(s => s.Definition.Key == "protein")?.Intake ?? 0.0;
+            double avgCarbs = weeklyStatuses.FirstOrDefault(s => s.Definition.Key == "carbohydrates")?.Intake ?? 0.0;
+            double avgFat = weeklyStatuses.FirstOrDefault(s => s.Definition.Key == "fat")?.Intake ?? 0.0;
+            double avgWater = weeklyStatuses.FirstOrDefault(s => s.Definition.Key == "water")?.Intake ?? 0.0;
+
+            var template = new Reports.WeeklyReportTemplate
+            {
+                StartDate = startDateStr,
+                EndDate = endDateStr,
+                ProfileName = _db.ActiveProfileName,
+                BiologicalSex = ProfileSex,
+                Age = ProfileAge,
+                ActivityLevel = ProfileActivity,
+                AvgCalories = avgCalories,
+                AvgProtein = avgProtein,
+                AvgCarbs = avgCarbs,
+                AvgFat = avgFat,
+                AvgWater = avgWater,
+                WeeklyNutrientStatuses = weeklyStatuses,
+                WeeklyFoodLogs = weeklyFoodLogs
+            };
+
+            return template.TransformText();
+        }
+
         #region Custom Daily Profiles Management Methods
 
         public void RefreshCustomProfilesList()
@@ -1256,117 +1755,295 @@ namespace DesktopNutritionTracker.ViewModels
             }
         }
 
+        public async Task<StorageData> GetFirestoreBackupDataAsync()
+        {
+            return await _storageService.GetFirestoreBackupDataAsync();
+        }
+
+        public async Task OverwriteFirestoreCollectionAsync(StorageData data)
+        {
+            await _storageService.SaveToFirestoreAsync(data);
+            ImportData(data);
+        }
+
+        private Dictionary<string, double> LowercaseNutrientKeys(Dictionary<string, double> nutrients)
+        {
+            if (nutrients == null) return new Dictionary<string, double>();
+            var sanitized = new Dictionary<string, double>();
+            foreach (var kvp in nutrients)
+            {
+                if (string.IsNullOrEmpty(kvp.Key)) continue;
+                string standardKey = MapToStandardKey(kvp.Key);
+                sanitized[standardKey] = kvp.Value;
+            }
+            return sanitized;
+        }
+
+        private static string MapToStandardKey(string rawKey)
+        {
+            string clean = rawKey.ToLowerInvariant().Replace("_", " ").Replace("-", " ").Trim();
+            
+            if (clean.Contains("calories") || clean.Contains("energy")) return "calories";
+            if (clean.Equals("carbohydrates") || clean.Contains("carbohydrate")) return "carbohydrates";
+            if (clean.Equals("protein")) return "protein";
+            if (clean.Equals("fat") || clean.Contains("total fat") || clean.Contains("lipid")) return "fat";
+            if (clean.Contains("fiber")) return "fiber";
+            if (clean.Contains("water") || clean.Contains("hydration")) return "water";
+            
+            if (clean.Contains("saturated fat")) return "saturated_fat";
+            if (clean.Contains("trans fat")) return "trans_fat";
+            if (clean.Contains("monounsaturated")) return "monounsaturated_fat";
+            if (clean.Contains("polyunsaturated")) return "polyunsaturated_fat";
+            if (clean.Contains("omega 3") || clean.Contains("omega3")) return "omega3";
+            if (clean.Contains("omega 6") || clean.Contains("omega6")) return "omega6";
+            if (clean.Contains("cholesterol")) return "cholesterol";
+            
+            if (clean.Contains("vitamin a")) return "vitamin_a";
+            if (clean.Contains("vitamin c")) return "vitamin_c";
+            if (clean.Contains("vitamin d")) return "vitamin_d";
+            if (clean.Contains("vitamin e")) return "vitamin_e";
+            if (clean.Contains("vitamin k")) return "vitamin_k";
+            if (clean.Contains("thiamin")) return "thiamin";
+            if (clean.Contains("riboflavin")) return "riboflavin";
+            if (clean.Contains("niacin")) return "niacin";
+            if (clean.Contains("pantothenic")) return "pantothenic_acid";
+            if (clean.Contains("vitamin b6") || clean.Contains("vitamin b 6") || clean.Contains("pyridoxine")) return "vitamin_b6";
+            if (clean.Contains("biotin")) return "biotin";
+            if (clean.Contains("folate") || clean.Contains("folic") || clean.Contains("folacin")) return "folate";
+            if (clean.Contains("vitamin b12") || clean.Contains("vitamin b 12") || clean.Contains("cobalamin")) return "vitamin_b12";
+            if (clean.Contains("choline")) return "choline";
+            
+            if (clean.Contains("calcium")) return "calcium";
+            if (clean.Contains("iron")) return "iron";
+            if (clean.Contains("magnesium")) return "magnesium";
+            if (clean.Contains("phosphorus")) return "phosphorus";
+            if (clean.Contains("potassium")) return "potassium";
+            if (clean.Contains("sodium")) return "sodium";
+            if (clean.Contains("zinc")) return "zinc";
+            if (clean.Contains("copper")) return "copper";
+            if (clean.Contains("manganese")) return "manganese";
+            if (clean.Contains("selenium")) return "selenium";
+            if (clean.Contains("chromium")) return "chromium";
+            if (clean.Contains("molybdenum")) return "molybdenum";
+            if (clean.Contains("sugars") || clean.Equals("sugar")) return "sugars";
+            if (clean.Contains("iodine")) return "iodine";
+
+            return rawKey.ToLowerInvariant(); // fallback
+        }
+
+        public void ImportRawJsonData(string rawJson)
+        {
+            var data = _storageService.ImportData(rawJson);
+            if (data != null)
+            {
+                ImportData(data);
+            }
+        }
+
         public void ImportData(StorageData importedData)
         {
-            if (importedData == null) return;
-
-            // Update backing DB structure
-            _db.FoodEntries = importedData.FoodEntries ?? new List<FoodLogEntry>();
-            _db.Supplements = importedData.Supplements ?? new List<Supplement>();
-            _db.CustomRdaOverrides = importedData.CustomRdaOverrides ?? new Dictionary<string, double>();
-            _db.ProfileAge = importedData.ProfileAge;
-            _db.ProfileActivity = importedData.ProfileActivity ?? "Lightly Active";
-            _db.ProfileSex = importedData.ProfileSex ?? "Female";
-            _db.ObservationDaysLimit = importedData.ObservationDaysLimit > 0 ? importedData.ObservationDaysLimit : 30;
-            _db.TakenSupplementsForToday = importedData.TakenSupplementsForToday ?? new List<string>();
-            _db.CustomDailyProfiles = importedData.CustomDailyProfiles ?? new List<CustomDailyProfile>();
-            _db.ActiveProfileName = importedData.ActiveProfileName ?? "Standard Baseline";
-
-            // Save immediately to regional database
-            _storageService.Save(_db);
-
-            // Re-trigger standard property notifications
-            ProfileAge = _db.ProfileAge;
-            ProfileActivity = _db.ProfileActivity;
-            ProfileSex = _db.ProfileSex;
-            ActiveProfileName = _db.ActiveProfileName;
-
-            // Sync Supplements checklist in ViewModel
-            Supplements.Clear();
-            foreach (var sup in _db.Supplements)
+            System.Diagnostics.Debug.WriteLine("[ImportData] Method entered.");
+            if (importedData == null)
             {
-                Supplements.Add(sup);
+                System.Diagnostics.Debug.WriteLine("[ImportData] Error: importedData is null!");
+                return;
             }
 
-            // Sync Custom profiles list
-            RefreshCustomProfilesList();
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[ImportData] Initiating import. Counts -> FoodEntries: {importedData.FoodEntries?.Count ?? 0}, Supplements: {importedData.Supplements?.Count ?? 0}, CustomRdaOverrides: {importedData.CustomRdaOverrides?.Count ?? 0}, CustomDailyProfiles: {importedData.CustomDailyProfiles?.Count ?? 0}, RecurringFoods: {importedData.RecurringFoods?.Count ?? 0}");
 
-            // Refresh today's food inputs and recalculated status loops
-            RefreshTodayData();
+                // Sanitize and lowercase nutrient dictionary keys to avoid mapping casing issues
+                var sanitizedFoodEntries = importedData.FoodEntries ?? new List<FoodLogEntry>();
+                foreach (var entry in sanitizedFoodEntries)
+                {
+                    entry.Nutrients = LowercaseNutrientKeys(entry.Nutrients);
+                }
 
-            OperationMessage = "Database imported successfully.";
+                var sanitizedSupplements = importedData.Supplements ?? new List<Supplement>();
+                foreach (var sup in sanitizedSupplements)
+                {
+                    sup.Nutrients = LowercaseNutrientKeys(sup.Nutrients);
+                }
+
+                var sanitizedCustomOverrides = LowercaseNutrientKeys(importedData.CustomRdaOverrides);
+
+                var sanitizedRecurringFoods = importedData.RecurringFoods ?? new List<FoodLogEntry>();
+                foreach (var rec in sanitizedRecurringFoods)
+                {
+                    rec.Nutrients = LowercaseNutrientKeys(rec.Nutrients);
+                }
+
+                // Update backing DB structure
+                _db.FoodEntries = sanitizedFoodEntries;
+                _db.Supplements = sanitizedSupplements;
+                _db.CustomRdaOverrides = sanitizedCustomOverrides;
+                _db.ProfileAge = importedData.ProfileAge;
+                _db.ProfileActivity = importedData.ProfileActivity ?? "Lightly Active";
+                _db.ProfileSex = importedData.ProfileSex ?? "Female";
+                _db.ObservationDaysLimit = importedData.ObservationDaysLimit > 0 ? importedData.ObservationDaysLimit : 30;
+                _db.TakenSupplementsForToday = importedData.TakenSupplementsForToday ?? new List<string>();
+                _db.CustomDailyProfiles = importedData.CustomDailyProfiles ?? new List<CustomDailyProfile>();
+                _db.ActiveProfileName = importedData.ActiveProfileName ?? "Standard Baseline";
+                _db.RecurringFoods = sanitizedRecurringFoods;
+                _db.ServingUnit = importedData.ServingUnit ?? "g";
+                _db.HasPrepopulatedSampleLogs = true;
+
+                System.Diagnostics.Debug.WriteLine("[ImportData] _db structure successfully populated in-memory. Invoking _storageService.Save(_db)...");
+
+                // Save immediately to regional database
+                _storageService.Save(_db);
+
+                System.Diagnostics.Debug.WriteLine("[ImportData] _storageService.Save completed successfully. Updating UI properties...");
+
+                // Re-trigger standard property notifications
+                ProfileAge = _db.ProfileAge;
+                ProfileActivity = _db.ProfileActivity;
+                ProfileSex = _db.ProfileSex;
+                ActiveProfileName = _db.ActiveProfileName;
+
+                // Sync Supplements checklist in ViewModel
+                Supplements.Clear();
+                foreach (var sup in _db.Supplements)
+                {
+                    Supplements.Add(sup);
+                }
+                System.Diagnostics.Debug.WriteLine($"[ImportData] UI Supplements collection populated with {Supplements.Count} items.");
+
+                // Sync Custom profiles list
+                RefreshCustomProfilesList();
+
+                // Sync Recurring foods list
+                RefreshRecurringFoodsList();
+
+                // Refresh today's food inputs and recalculated status loops
+                RefreshTodayData();
+
+                System.Diagnostics.Debug.WriteLine("[ImportData] RefreshTodayData completed.");
+                OperationMessage = "Database imported successfully.";
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ImportData] CRITICAL ERROR during ImportData: {ex.Message}\n{ex.StackTrace}");
+                throw;
+            }
         }
 
         public void ImportSupplements(List<Supplement> importedSupplements)
         {
-            if (importedSupplements == null || importedSupplements.Count == 0) return;
-
-            // Merging strategy: if name doesn't exist, append it. If it exists, overwrite it.
-            foreach (var imported in importedSupplements)
+            System.Diagnostics.Debug.WriteLine("[ImportSupplements] Method entered.");
+            if (importedSupplements == null || importedSupplements.Count == 0)
             {
-                if (string.IsNullOrEmpty(imported.Name)) continue;
-
-                var existing = _db.Supplements.FirstOrDefault(s => s.Name.Equals(imported.Name, StringComparison.OrdinalIgnoreCase));
-                if (existing != null)
-                {
-                    // Update properties of existing supplement in-place
-                    existing.Dosage = imported.Dosage ?? "";
-                    existing.Frequency = imported.Frequency ?? "";
-                    existing.DaysOfWeek = imported.DaysOfWeek ?? "";
-                    existing.TimeOfDay = imported.TimeOfDay ?? "Morning";
-                    existing.Notes = imported.Notes ?? "";
-                    existing.Nutrients = imported.Nutrients ?? new Dictionary<string, double>();
-                }
-                else
-                {
-                    // Create new and add
-                    int newId = _db.Supplements.Count > 0 ? _db.Supplements.Max(s => s.Id) + 1 : 1;
-                    imported.Id = newId;
-                    _db.Supplements.Add(imported);
-                }
+                System.Diagnostics.Debug.WriteLine("[ImportSupplements] Warning: importedSupplements is null or empty.");
+                return;
             }
 
-            // Save immediately to regional database
-            _storageService.Save(_db);
-
-            // Sync Supplements checklist in ViewModel
-            Supplements.Clear();
-            foreach (var sup in _db.Supplements)
+            try
             {
-                Supplements.Add(sup);
+                System.Diagnostics.Debug.WriteLine($"[ImportSupplements] Merging {importedSupplements.Count} supplements. Existing count: {_db.Supplements.Count}");
+
+                // Merging strategy: if name doesn't exist, append it. If it exists, overwrite it.
+                foreach (var imported in importedSupplements)
+                {
+                    if (string.IsNullOrEmpty(imported.Name)) continue;
+
+                    // Ensure nutrient keys are lowercased
+                    imported.Nutrients = LowercaseNutrientKeys(imported.Nutrients);
+
+                    var existing = _db.Supplements.FirstOrDefault(s => s.Name.Equals(imported.Name, StringComparison.OrdinalIgnoreCase));
+                    if (existing != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ImportSupplements] Overwriting existing supplement: '{existing.Name}'");
+                        // Update properties of existing supplement in-place
+                        existing.Dosage = imported.Dosage ?? "";
+                        existing.Frequency = imported.Frequency ?? "";
+                        existing.DaysOfWeek = imported.DaysOfWeek ?? "";
+                        existing.TimeOfDay = imported.TimeOfDay ?? "Morning";
+                        existing.Notes = imported.Notes ?? "";
+                        existing.Nutrients = imported.Nutrients;
+                    }
+                    else
+                    {
+                        // Create new and add
+                        int newId = _db.Supplements.Count > 0 ? _db.Supplements.Max(s => s.Id) + 1 : 1;
+                        imported.Id = newId;
+                        _db.Supplements.Add(imported);
+                        System.Diagnostics.Debug.WriteLine($"[ImportSupplements] Appended new supplement: '{imported.Name}' with ID: {imported.Id}");
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine("[ImportSupplements] Invoking _storageService.Save(_db)...");
+                // Save immediately to regional database
+                _storageService.Save(_db);
+                System.Diagnostics.Debug.WriteLine("[ImportSupplements] _storageService.Save completed successfully. Updating UI list...");
+
+                // Sync Supplements checklist in ViewModel
+                Supplements.Clear();
+                foreach (var sup in _db.Supplements)
+                {
+                    Supplements.Add(sup);
+                }
+
+                // Refresh today's food inputs and recalculated status loops
+                RefreshTodayData();
+
+                System.Diagnostics.Debug.WriteLine("[ImportSupplements] RefreshTodayData completed.");
+                OperationMessage = $"Successfully merged {importedSupplements.Count} supplements/nutrients!";
             }
-
-            // Refresh today's food inputs and recalculated status loops
-            RefreshTodayData();
-
-            OperationMessage = $"Successfully merged {importedSupplements.Count} supplements/nutrients!";
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ImportSupplements] CRITICAL ERROR during ImportSupplements: {ex.Message}\n{ex.StackTrace}");
+                throw;
+            }
         }
 
         public void ImportFoodLogs(List<FoodLogEntry> importedFoodLogs)
         {
-            if (importedFoodLogs == null || importedFoodLogs.Count == 0) return;
-
-            foreach (var imported in importedFoodLogs)
+            System.Diagnostics.Debug.WriteLine("[ImportFoodLogs] Method entered.");
+            if (importedFoodLogs == null || importedFoodLogs.Count == 0)
             {
-                if (string.IsNullOrEmpty(imported.FoodName)) continue;
-
-                // Create new and append to existing food log dictionary or DB list
-                int newId = _db.FoodEntries.Count > 0 ? _db.FoodEntries.Max(f => f.Id) + 1 : 1;
-                imported.Id = newId;
-                if (string.IsNullOrEmpty(imported.Date))
-                {
-                    imported.Date = CurrentDateString;
-                }
-                _db.FoodEntries.Add(imported);
+                System.Diagnostics.Debug.WriteLine("[ImportFoodLogs] Warning: importedFoodLogs is null or empty.");
+                return;
             }
 
-            // Save immediately to database
-            _storageService.Save(_db);
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[ImportFoodLogs] Importing {importedFoodLogs.Count} food log entries. Existing count: {_db.FoodEntries.Count}");
 
-            // Refresh today's food inputs and recalculated status loops
-            RefreshTodayData();
+                foreach (var imported in importedFoodLogs)
+                {
+                    if (string.IsNullOrEmpty(imported.FoodName)) continue;
 
-            OperationMessage = $"Successfully imported {importedFoodLogs.Count} food journal entries!";
+                    // Ensure nutrient keys are lowercased
+                    imported.Nutrients = LowercaseNutrientKeys(imported.Nutrients);
+
+                    // Create new and append to existing food log dictionary or DB list
+                    int newId = _db.FoodEntries.Count > 0 ? _db.FoodEntries.Max(f => f.Id) + 1 : 1;
+                    imported.Id = newId;
+                    if (string.IsNullOrEmpty(imported.Date))
+                    {
+                        imported.Date = CurrentDateString;
+                    }
+                    _db.FoodEntries.Add(imported);
+                    System.Diagnostics.Debug.WriteLine($"[ImportFoodLogs] Appended food entry: '{imported.FoodName}' for date: {imported.Date} with ID: {imported.Id}");
+                }
+
+                System.Diagnostics.Debug.WriteLine("[ImportFoodLogs] Invoking _storageService.Save(_db)...");
+                // Save immediately to database
+                _storageService.Save(_db);
+                System.Diagnostics.Debug.WriteLine("[ImportFoodLogs] _storageService.Save completed successfully. Refreshing UI...");
+
+                // Refresh today's food inputs and recalculated status loops
+                RefreshTodayData();
+
+                System.Diagnostics.Debug.WriteLine("[ImportFoodLogs] RefreshTodayData completed.");
+                OperationMessage = $"Successfully imported {importedFoodLogs.Count} food journal entries!";
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ImportFoodLogs] CRITICAL ERROR during ImportFoodLogs: {ex.Message}\n{ex.StackTrace}");
+                throw;
+            }
         }
 
         public void RefreshRecurringFoodsList()
@@ -1524,7 +2201,7 @@ namespace DesktopNutritionTracker.ViewModels
 
             try
             {
-                var result = await GeminiService.ParseFoodWithAiAsync(AIQueryFoodName);
+                var result = await _geminiService.ParseFoodWithAiAsync(AIQueryFoodName);
                 if (result != null)
                 {
                     AIFetchedPreviewResult = result;
@@ -1546,6 +2223,139 @@ namespace DesktopNutritionTracker.ViewModels
             }
         }
 
+        public async Task GenerateAiMenuPlanAsync()
+        {
+            IsAiPlanning = true;
+            AiPlannerStatusText = "Analyzing daily targets and staple foods... Please wait.";
+            SuggestedMenuItems.Clear();
+            HasSuggestedMenu = false;
+
+            try
+            {
+                // 1. Build profile description
+                string profile = $"Biological Sex: {ProfileSex}, Age: {ProfileAge} years, Activity Level Index: {ProfileActivity}.";
+
+                // 2. Build staples description
+                var staplesList = new List<string>();
+                foreach (var s in SelectedMenuStaples)
+                {
+                    staplesList.Add($"{s.FoodName} ({s.Quantity} {s.Unit}) for {s.MealType}");
+                }
+
+                // 3. Build outstanding clinical deficits description
+                // We'll calculate targets relative to 100% RDA
+                var deficitsList = new List<string>();
+                foreach (var status in NutrientStatuses)
+                {
+                    // If nutrient is a goal (not a limit) and is not met, calculate deficit
+                    if (!status.Definition.IsMaxLimit && status.Percentage < 100.0 && status.Definition.Rda > 0)
+                    {
+                        double outstanding = status.Definition.Rda - status.Intake;
+                        if (outstanding > 0.01)
+                        {
+                            deficitsList.Add($"{status.Definition.Name}: outstanding deficit of {outstanding:F1} {status.Definition.Unit} (currently {status.Percentage:F0}% met)");
+                        }
+                    }
+                }
+
+                AiPlannerStatusText = "Consulting Gemini AI to formulate optimal clinical remaining meals & targeted snacks... Please wait.";
+                var suggestions = await _geminiService.SuggestRemainingMenuWithAiAsync(profile, staplesList, deficitsList);
+
+                if (suggestions != null && suggestions.Count > 0)
+                {
+                    foreach (var s in suggestions)
+                    {
+                        var entry = new FoodLogEntry
+                        {
+                            FoodName = s.FoodName,
+                            MealType = string.IsNullOrWhiteSpace(s.MealType) ? "Snack" : s.MealType,
+                            Quantity = s.Quantity,
+                            Unit = string.IsNullOrWhiteSpace(s.Unit) ? "serving" : s.Unit,
+                            Nutrients = s.Nutrients ?? new Dictionary<string, double>()
+                        };
+                        SuggestedMenuItems.Add(entry);
+                    }
+                    HasSuggestedMenu = true;
+                    AiPlannerStatusText = $"Success! Gemini suggested {suggestions.Count} additional clinical item(s), including optimized snacks!";
+                }
+                else
+                {
+                    AiPlannerStatusText = "Warning: Gemini suggested no additional items. Try adjusting your staples.";
+                }
+            }
+            catch (Exception ex)
+            {
+                AiPlannerStatusText = $"Error: {ex.Message}";
+                System.Diagnostics.Debug.WriteLine($"Menu Planner Error: {ex.Message}");
+            }
+            finally
+            {
+                IsAiPlanning = false;
+            }
+        }
+
+        public void CommitPlannedMenuToJournal()
+        {
+            if (SuggestedMenuItems.Count == 0 && SelectedMenuStaples.Count == 0)
+            {
+                AiPlannerStatusText = "No planned items to commit. Please plan or configure usuals first.";
+                return;
+            }
+
+            try
+            {
+                // Add selected staples
+                foreach (var s in SelectedMenuStaples)
+                {
+                    var lastId = _db.FoodEntries.Count > 0 ? _db.FoodEntries.Max(f => f.Id) + 1 : 1;
+                    var entry = new FoodLogEntry
+                    {
+                        Id = lastId,
+                        Date = CurrentDateString,
+                        FoodName = s.FoodName,
+                        MealType = s.MealType,
+                        Quantity = s.Quantity,
+                        Unit = s.Unit,
+                        Nutrients = new Dictionary<string, double>(s.Nutrients ?? new Dictionary<string, double>())
+                    };
+                    _db.FoodEntries.Add(entry);
+                }
+
+                // Add suggested meals/snacks
+                foreach (var s in SuggestedMenuItems)
+                {
+                    var lastId = _db.FoodEntries.Count > 0 ? _db.FoodEntries.Max(f => f.Id) + 1 : 1;
+                    var entry = new FoodLogEntry
+                    {
+                        Id = lastId,
+                        Date = CurrentDateString,
+                        FoodName = s.FoodName,
+                        MealType = s.MealType,
+                        Quantity = s.Quantity,
+                        Unit = s.Unit,
+                        Nutrients = new Dictionary<string, double>(s.Nutrients ?? new Dictionary<string, double>())
+                    };
+                    _db.FoodEntries.Add(entry);
+                }
+
+                _storageService.Save(_db);
+                
+                RefreshTodayData();
+                CheckNutrientAlerts(autoShow: true);
+
+                SuggestedMenuItems.Clear();
+                SelectedMenuStaples.Clear();
+                HasSuggestedMenu = false;
+
+                AiPlannerStatusText = "Success! The selected usuals and AI suggestions have been written directly to your Clinical Food Journal.";
+                OperationMessage = "Clinical menu successfully saved to journal!";
+            }
+            catch (Exception ex)
+            {
+                AiPlannerStatusText = $"Error saving: {ex.Message}";
+            }
+        }
+
         public void RefreshPreviewNutrients()
         {
             PreviewNutrients.Clear();
@@ -1557,7 +2367,8 @@ namespace DesktopNutritionTracker.ViewModels
             {
                 double baseVal = 0.0;
                 string key = def.Key.ToLower();
-                if (_aiFetchedPreviewResult.Nutrients.TryGetValue(key, out double val))
+                double val;
+                if (_aiFetchedPreviewResult.Nutrients.TryGetValue(key, out val))
                 {
                     baseVal = val;
                 }
@@ -1660,6 +2471,7 @@ namespace DesktopNutritionTracker.ViewModels
             _storageService.Save(_db);
             
             RefreshTodayData();
+            CheckNutrientAlerts(autoShow: true);
             
             OperationMessage = $"Successfully logged '{finalFoodName}' ({qty} {finalUnit}) for {AIQueryMealType}!";
             
@@ -1797,6 +2609,323 @@ namespace DesktopNutritionTracker.ViewModels
                     }
                 }
             }
+        }
+
+        // ==========================================
+        // USDA Food Search Properties & Methods
+        // ==========================================
+        private string _usdaSearchQuery = "";
+        public string UsdaSearchQuery
+        {
+            get => _usdaSearchQuery;
+            set => SetProperty(ref _usdaSearchQuery, value);
+        }
+
+        private bool _isUsdaSearching;
+        public bool IsUsdaSearching
+        {
+            get => _isUsdaSearching;
+            set => SetProperty(ref _isUsdaSearching, value);
+        }
+
+        private string _usdaSearchStatusText = "Enter a search term and click Search to query USDA FoodData Central!";
+        public string UsdaSearchStatusText
+        {
+            get => _usdaSearchStatusText;
+            set => SetProperty(ref _usdaSearchStatusText, value);
+        }
+
+        public ObservableCollection<UsdaNutrientProfile> UsdaSearchResults { get; } = new ObservableCollection<UsdaNutrientProfile>();
+
+        private UsdaNutrientProfile? _selectedUsdaResult;
+        public UsdaNutrientProfile? SelectedUsdaResult
+        {
+            get => _selectedUsdaResult;
+            set
+            {
+                if (SetProperty(ref _selectedUsdaResult, value))
+                {
+                    RefreshUsdaPreviewNutrients();
+                    NotifyPropertyChanged(nameof(HasUsdaPreviewResult));
+                    NotifyPropertyChanged(nameof(UsdaPreviewFoodName));
+                    NotifyPropertyChanged(nameof(UsdaPreviewCalories));
+                    NotifyPropertyChanged(nameof(UsdaPreviewProtein));
+                    NotifyPropertyChanged(nameof(UsdaPreviewCarbs));
+                    NotifyPropertyChanged(nameof(UsdaPreviewFat));
+                }
+            }
+        }
+
+        private string _usdaServingCountText = "1.0";
+        public string UsdaServingCountText
+        {
+            get => _usdaServingCountText;
+            set
+            {
+                if (SetProperty(ref _usdaServingCountText, value))
+                {
+                    RefreshUsdaPreviewNutrients();
+                    NotifyPropertyChanged(nameof(UsdaPreviewCalories));
+                    NotifyPropertyChanged(nameof(UsdaPreviewProtein));
+                    NotifyPropertyChanged(nameof(UsdaPreviewCarbs));
+                    NotifyPropertyChanged(nameof(UsdaPreviewFat));
+                }
+            }
+        }
+
+        private string _usdaMealType = "Breakfast";
+        public string UsdaMealType
+        {
+            get => _usdaMealType;
+            set => SetProperty(ref _usdaMealType, value);
+        }
+
+        public ObservableCollection<NutritionPreviewItem> UsdaPreviewNutrients { get; } = new ObservableCollection<NutritionPreviewItem>();
+
+        public bool HasUsdaPreviewResult => SelectedUsdaResult != null;
+
+        public string UsdaPreviewFoodName => SelectedUsdaResult?.Description ?? "";
+
+        public double UsdaPreviewQuantity
+        {
+            get
+            {
+                double q;
+                if (double.TryParse(_usdaServingCountText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out q) && q > 0)
+                {
+                    return q;
+                }
+                return 1.0;
+            }
+        }
+
+        public double UsdaPreviewCalories => GetUsdaPreviewNutrientValue("calories");
+        public double UsdaPreviewProtein => GetUsdaPreviewNutrientValue("protein");
+        public double UsdaPreviewCarbs => GetUsdaPreviewNutrientValue("carbohydrates");
+        public double UsdaPreviewFat => GetUsdaPreviewNutrientValue("fat");
+
+        private double GetUsdaPreviewNutrientValue(string key)
+        {
+            if (SelectedUsdaResult == null || SelectedUsdaResult.Nutrients == null) return 0.0;
+            double baseVal = 0.0;
+            SelectedUsdaResult.Nutrients.TryGetValue(key, out baseVal);
+            return baseVal * UsdaPreviewQuantity;
+        }
+
+        public string UsdaApiKeyMasked
+        {
+            get
+            {
+                string key = UsdaNutritionService.GetActiveApiKey();
+                if (string.IsNullOrEmpty(key) || key == "DEMO_KEY") return "Demo Mode (DEMO_KEY)";
+                if (key.Length <= 8) return "Active Key: " + key;
+                return "Active Key: " + key.Substring(0, 4) + "..." + key.Substring(key.Length - 4);
+            }
+        }
+
+        private bool _isUsdaDetailLoading;
+        public bool IsUsdaDetailLoading
+        {
+            get => _isUsdaDetailLoading;
+            set => SetProperty(ref _isUsdaDetailLoading, value);
+        }
+
+        public async Task LoadSelectedUsdaDetailAsync(UsdaNutrientProfile? selectedItem)
+        {
+            if (selectedItem == null)
+            {
+                SelectedUsdaResult = null;
+                return;
+            }
+
+            IsUsdaDetailLoading = true;
+            try
+            {
+                var detailedProfile = await UsdaNutritionService.GetFoodDetailsProfileAsync(selectedItem.FdcId);
+                if (detailedProfile != null)
+                {
+                    SelectedUsdaResult = detailedProfile;
+                }
+                else
+                {
+                    SelectedUsdaResult = selectedItem;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to load USDA food details: {ex.Message}");
+                SelectedUsdaResult = selectedItem;
+            }
+            finally
+            {
+                IsUsdaDetailLoading = false;
+            }
+        }
+
+        public async Task SearchUsdaFoodsAsync()
+        {
+            if (string.IsNullOrWhiteSpace(UsdaSearchQuery))
+            {
+                UsdaSearchStatusText = "Please type a food search term first.";
+                return;
+            }
+
+            IsUsdaSearching = true;
+            UsdaSearchStatusText = "Searching USDA FoodData Central database... Please wait.";
+            UsdaSearchResults.Clear();
+            SelectedUsdaResult = null;
+
+            try
+            {
+                var results = await UsdaNutritionService.SearchFoodNutritionalProfileAsync(UsdaSearchQuery);
+                if (results == null || results.Count == 0)
+                {
+                    UsdaSearchStatusText = "No results found on USDA FoodData Central for: " + UsdaSearchQuery;
+                }
+                else
+                {
+                    foreach (var r in results)
+                    {
+                        UsdaSearchResults.Add(r);
+                    }
+                    UsdaSearchStatusText = $"Found {results.Count} matches. Select an item to view diagnostic details.";
+                }
+            }
+            catch (Exception ex)
+            {
+                UsdaSearchStatusText = $"Search failed: {ex.Message}";
+                System.Diagnostics.Debug.WriteLine($"USDA Search Error: {ex.Message}");
+            }
+            finally
+            {
+                IsUsdaSearching = false;
+            }
+        }
+
+        public void RefreshUsdaPreviewNutrients()
+        {
+            UsdaPreviewNutrients.Clear();
+            if (SelectedUsdaResult == null || SelectedUsdaResult.Nutrients == null) return;
+
+            double qty = UsdaPreviewQuantity;
+
+            foreach (var def in Nutrients.Definitions)
+            {
+                double baseVal = 0.0;
+                string key = def.Key.ToLower();
+                double val;
+                if (SelectedUsdaResult.Nutrients.TryGetValue(key, out val))
+                {
+                    baseVal = val;
+                }
+
+                double totalVal = baseVal * qty;
+                
+                double targetRda = def.Rda;
+                if (_db.CustomRdaOverrides.ContainsKey(def.Key))
+                {
+                    targetRda = _db.CustomRdaOverrides[def.Key];
+                }
+
+                double pct = 0.0;
+                if (targetRda > 0)
+                {
+                    pct = (totalVal / targetRda) * 100.0;
+                }
+
+                string statusTxt = "Normal";
+                string brush = "#94A3B8"; // Default slate color
+
+                if (targetRda > 0)
+                {
+                    if (def.IsMaxLimit)
+                    {
+                        if (totalVal > targetRda)
+                        {
+                            statusTxt = "Limit Exceeded";
+                            brush = "#EF4444"; // StatusRed
+                        }
+                        else if (totalVal > targetRda * 0.8)
+                        {
+                            statusTxt = "Near Limit";
+                            brush = "#D97706"; // StatusYellow
+                        }
+                        else
+                        {
+                            statusTxt = "Safe";
+                            brush = "#059669"; // StatusGreen
+                        }
+                    }
+                    else
+                    {
+                        if (pct >= 100.0)
+                        {
+                            statusTxt = "RDA Met";
+                            brush = "#059669"; // StatusGreen
+                        }
+                        else if (pct >= 50.0)
+                        {
+                            statusTxt = "Partial RDA";
+                            brush = "#D97706"; // StatusYellow
+                        }
+                        else
+                        {
+                            statusTxt = "Low Daily Share";
+                            brush = "#94A3B8"; // Slate text
+                        }
+                    }
+                }
+
+                UsdaPreviewNutrients.Add(new NutritionPreviewItem
+                {
+                    Key = def.Key,
+                    Name = def.Name,
+                    Group = def.Group.GetDisplayName(),
+                    DisplayIntake = $"{totalVal:F1} {def.Unit}",
+                    DisplayRda = targetRda > 0 ? $"{targetRda:F1} {def.Unit}" : "N/A",
+                    Percentage = pct,
+                    StatusText = statusTxt,
+                    StatusBrush = brush
+                });
+            }
+        }
+
+        public bool CommitUsdaResultToToday()
+        {
+            if (SelectedUsdaResult == null) return false;
+
+            double qty = UsdaPreviewQuantity;
+            string finalFoodName = SelectedUsdaResult.Description;
+            string finalUnit = string.IsNullOrWhiteSpace(SelectedUsdaResult.ServingSizeUnit) ? "g" : SelectedUsdaResult.ServingSizeUnit;
+
+            var lastId = _db.FoodEntries.Count > 0 ? _db.FoodEntries.Max(f => f.Id) + 1 : 1;
+
+            var entry = new FoodLogEntry
+            {
+                Id = lastId,
+                Date = CurrentDateString,
+                FoodName = finalFoodName,
+                MealType = UsdaMealType,
+                Quantity = qty,
+                Unit = finalUnit,
+                Nutrients = new Dictionary<string, double>(SelectedUsdaResult.Nutrients ?? new Dictionary<string, double>())
+            };
+
+            NormalizeFoodLogEntryUnit(entry);
+
+            _db.FoodEntries.Add(entry);
+            _storageService.Save(_db);
+            
+            RefreshTodayData();
+            CheckNutrientAlerts(autoShow: true);
+            
+            OperationMessage = $"Successfully logged '{finalFoodName}' ({qty} {finalUnit}) for {UsdaMealType}!";
+            
+            UsdaSearchQuery = "";
+            SelectedUsdaResult = null;
+            UsdaSearchResults.Clear();
+            UsdaSearchStatusText = "Food logged successfully! Ready for next inquiry.";
+            return true;
         }
 
         // INotifyPropertyChanged helpers

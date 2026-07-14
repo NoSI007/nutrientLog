@@ -54,6 +54,7 @@ data class DayTrend(
 
 class NutritionViewModel(application: Application) : AndroidViewModel(application) {
     val repository = FoodRepository(application)
+    val usdaCacheService = com.example.data.UsdaCacheService(application)
     private val sharedPrefs = application.getSharedPreferences("nutrition_targets", Context.MODE_PRIVATE)
     private val localStorage = application.getSharedPreferences("local_storage", Context.MODE_PRIVATE)
 
@@ -90,6 +91,14 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         _operationMessage.value = "Updated API Integration credentials!"
     }
 
+    private val _themeMode = MutableStateFlow(sharedPrefs.getString("theme_mode", "system") ?: "system")
+    val themeMode: StateFlow<String> = _themeMode.asStateFlow()
+
+    fun setThemeMode(mode: String) {
+        _themeMode.value = mode
+        sharedPrefs.edit().putString("theme_mode", mode).apply()
+    }
+
     private val _currentDate = MutableStateFlow(getTodayDateString())
     val currentDate: StateFlow<String> = _currentDate.asStateFlow()
 
@@ -117,6 +126,13 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         )
 
     val allFavoriteMeals: StateFlow<List<com.example.data.FavoriteMeal>> = repository.allFavoriteMeals
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val allFavoriteFoods: StateFlow<List<com.example.data.FavoriteFood>> = repository.allFavoriteFoods
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -223,6 +239,9 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
     private val _profileGoal = MutableStateFlow("Balanced / Maintenance")
     val profileGoal: StateFlow<String> = _profileGoal.asStateFlow()
 
+    private val _activeHealthPreset = MutableStateFlow("None")
+    val activeHealthPreset: StateFlow<String> = _activeHealthPreset.asStateFlow()
+
     private val _aiNutritionalTip = MutableStateFlow<String?>(null)
     val aiNutritionalTip: StateFlow<String?> = _aiNutritionalTip.asStateFlow()
 
@@ -250,18 +269,134 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
     private val _localCustomFoods = MutableStateFlow<List<CustomStateFoodItem>>(emptyList())
     val localCustomFoods: StateFlow<List<CustomStateFoodItem>> = _localCustomFoods.asStateFlow()
 
+    private val _aiSuggestedRecipes = MutableStateFlow<List<AiRecipeSuggestion>>(emptyList())
+    val aiSuggestedRecipes: StateFlow<List<AiRecipeSuggestion>> = _aiSuggestedRecipes.asStateFlow()
+
+    private val _isRecipesLoading = MutableStateFlow(false)
+    val isRecipesLoading: StateFlow<Boolean> = _isRecipesLoading.asStateFlow()
+
+    private val _recipesError = MutableStateFlow<String?>(null)
+    val recipesError: StateFlow<String?> = _recipesError.asStateFlow()
+
+    private val _plannedMenu = MutableStateFlow<List<PlannedMeal>>(emptyList())
+    val plannedMenu: StateFlow<List<PlannedMeal>> = _plannedMenu.asStateFlow()
+
+    private val _isPlanningLoading = MutableStateFlow(false)
+    val isPlanningLoading: StateFlow<Boolean> = _isPlanningLoading.asStateFlow()
+
+    private val _planningError = MutableStateFlow<String?>(null)
+    val planningError: StateFlow<String?> = _planningError.asStateFlow()
+
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
+    // --- Gemini Diagnostics & Settings states ---
+    private val _geminiActiveModel = MutableStateFlow(com.example.data.GeminiAuthHandler.getActiveModel())
+    val geminiActiveModel: StateFlow<String> = _geminiActiveModel.asStateFlow()
+
+    private val _geminiCustomApiKey = MutableStateFlow(com.example.data.GeminiAuthHandler.getCustomSavedKey())
+    val geminiCustomApiKey: StateFlow<String> = _geminiCustomApiKey.asStateFlow()
+
+    private val _geminiDiagnosticResult = MutableStateFlow<String?>(null)
+    val geminiDiagnosticResult: StateFlow<String?> = _geminiDiagnosticResult.asStateFlow()
+
+    private val _geminiDiagnosticLoading = MutableStateFlow(false)
+    val geminiDiagnosticLoading: StateFlow<Boolean> = _geminiDiagnosticLoading.asStateFlow()
+
+    fun updateGeminiModel(model: String) {
+        com.example.data.GeminiAuthHandler.saveActiveModel(model)
+        _geminiActiveModel.value = model
+        _operationMessage.value = "Gemini Engine set to: $model"
+    }
+
+    fun updateGeminiCustomApiKey(key: String) {
+        com.example.data.GeminiAuthHandler.saveCustomKey(key)
+        _geminiCustomApiKey.value = key
+        _operationMessage.value = "Saved Custom Gemini API Key!"
+    }
+
+    fun runGeminiDiagnostics() {
+        _geminiDiagnosticLoading.value = true
+        _geminiDiagnosticResult.value = "Running API diagnostics... Connecting to Google AI Registry..."
+        
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val key = com.example.data.GeminiAuthHandler.getApiKey()
+            if (key.isEmpty()) {
+                _geminiDiagnosticResult.value = "❌ ERROR: No API Key found!\n\nReason: The key resolves to an empty string. Please generate a new key in Google AI Studio (https://aistudio.google.com/app/apikey) and configure it in the Secrets panel or enter it above as a custom key."
+                _geminiDiagnosticLoading.value = false
+                return@launch
+            }
+            
+            val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$key"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", "NutritionTracker/1.0 (Android; Kotlin; com.example)")
+                .addHeader("Accept", "application/json")
+                .get()
+                .build()
+                
+            try {
+                okHttpClient.newCall(request).execute().use { response ->
+                    val code = response.code
+                    val body = response.body?.string() ?: ""
+                    
+                    val resultText = buildString {
+                        append("=== DIAGNOSTIC REPORT ===\n")
+                        append("Connection status: ${if (response.isSuccessful) "CONNECTED (HTTP 200)" else "FAILED (HTTP $code)"}\n\n")
+                        
+                        if (response.isSuccessful) {
+                            append("✅ SUCCESS! Your API Key is active and authorized.\n")
+                            append("The model registry list was fetched successfully.\n\n")
+                            if (body.contains("\"name\"")) {
+                                val modelCount = body.split("\"name\"").size - 1
+                                append("Found $modelCount available Gemini models in registry.\n")
+                            } else {
+                                append("No models returned but registry responded successfully.\n")
+                            }
+                        } else {
+                            append("❌ AUTHORIZATION FAILURE!\n")
+                            append("HTTP Status: $code ${response.message}\n\n")
+                            
+                            if (body.contains("leaked") || body.contains("Leaked") || body.contains("PERMISSION_DENIED")) {
+                                append("Critical Alert: Google has marked your API key as LEAKED or INVALID!\n")
+                                append("Google's security system automatically disables leaked keys if they are found in public code repositories, public builds, or log dumps. To protect your billing or resource limits, this key CANNOT be used.\n\n")
+                                append("👉 ACTION REQUIRED:\n")
+                                append("1. Go to Google AI Studio: https://aistudio.google.com/app/apikey\n")
+                                append("2. Generate a brand new API key.\n")
+                                append("3. Enter it securely into the Secrets panel or as a Custom Key above.\n")
+                            } else {
+                                append("Response Details:\n$body\n")
+                            }
+                        }
+                    }
+                    
+                    _geminiDiagnosticResult.value = resultText
+                }
+            } catch (e: Exception) {
+                _geminiDiagnosticResult.value = "❌ NETWORK ERROR: ${e.localizedMessage}\n\nPlease check your internet connection and try again."
+            } finally {
+                _geminiDiagnosticLoading.value = false
+            }
+        }
+    }
+
     init {
+        // Initialize Gemini Auth Handler
+        com.example.data.GeminiAuthHandler.initialize(application)
+
         // Load the local JSON-based nutrient database structure
         com.example.data.Nutrients.loadFromDatabase(application)
 
+        // Seed 41 essential nutrients to Room database schema asynchronously
+        viewModelScope.launch {
+            repository.ensureNutrientsSeeded()
+        }
+
         // Load custom RDA overrides
         val saved = mutableMapOf<String, Double>()
-        val excludedKeys = setOf("profile_age", "profile_activity", "profile_sex", "profile_weight", "profile_goal", "observation_days_limit", "daily_summary_notifications_enabled")
+        val excludedKeys = setOf("profile_age", "profile_activity", "profile_sex", "profile_weight", "profile_goal", "observation_days_limit", "daily_summary_notifications_enabled", "active_health_preset")
         sharedPrefs.all.forEach { (key, value) ->
             if (key !in excludedKeys) {
                 when (value) {
@@ -280,9 +415,25 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         _profileActivity.value = sharedPrefs.getString("profile_activity", "Lightly Active") ?: "Lightly Active"
         _profileSex.value = sharedPrefs.getString("profile_sex", "Female") ?: "Female"
         _profileGoal.value = sharedPrefs.getString("profile_goal", "Balanced / Maintenance") ?: "Balanced / Maintenance"
+        _activeHealthPreset.value = sharedPrefs.getString("active_health_preset", "None") ?: "None"
         _dailySummaryNotificationsEnabled.value = sharedPrefs.getBoolean("daily_summary_notifications_enabled", false)
 
-        val customFoodsJson = sharedPrefs.getString("local_custom_foods", null)
+        var customFoodsJson = sharedPrefs.getString("local_custom_foods", null)
+        if (customFoodsJson.isNullOrBlank()) {
+            val internalFile = java.io.File(application.filesDir, "local_custom_foods_backup.json")
+            if (internalFile.exists()) {
+                customFoodsJson = internalFile.readText()
+            }
+        }
+        if (customFoodsJson.isNullOrBlank()) {
+            application.getExternalFilesDir(null)?.let { dir ->
+                val externalFile = java.io.File(dir, "local_custom_foods_backup.json")
+                if (externalFile.exists()) {
+                    customFoodsJson = externalFile.readText()
+                }
+            }
+        }
+
         val loadedCustomFoods = mutableListOf<CustomStateFoodItem>()
         if (customFoodsJson != null) {
             try {
@@ -318,27 +469,73 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                // Restore from persistent SharedPreferences JSON backup if available, of if empty fall back to sample logs
-                val backupJson = sharedPrefs.getString("backup_food_logs", null)
                 val existing = repository.allEntries.first()
-                if (existing.isEmpty()) {
-                    if (!backupJson.isNullOrBlank()) {
-                        repository.importFromJson(backupJson)
+                if (existing.isNotEmpty()) {
+                    android.util.Log.i("NutritionViewModel", "Local Room database contains existing data. Preserving local state as source of truth.")
+                } else {
+                    android.util.Log.i("NutritionViewModel", "Local Room database is empty. Attempting to restore from Firestore...")
+                    // Prioritize loading from Firestore primary storage backend when local is completely empty
+                    val firestoreEntries = com.example.data.FirestoreService.getAllFoodLogEntries()
+                    if (firestoreEntries.isNotEmpty()) {
+                        android.util.Log.i("NutritionViewModel", "Found ${firestoreEntries.size} food log entries in Firestore. Synchronizing to local Room database.")
+                        repository.deleteAllEntriesLocalOnly()
+                        repository.insertEntriesLocalOnly(firestoreEntries)
                     } else {
-                        prepopulateSampleLogs()
+                        android.util.Log.i("NutritionViewModel", "No entries found in Firestore (or offline). Checking local backups.")
+                        // Restore from persistent JSON backup files or SharedPreferences if available
+                        var backupJson = sharedPrefs.getString("backup_food_logs", null)
+                        if (backupJson.isNullOrBlank()) {
+                            val internalFile = java.io.File(application.filesDir, "backup_food_logs.json")
+                            if (internalFile.exists()) {
+                                backupJson = internalFile.readText()
+                            }
+                        }
+                        if (backupJson.isNullOrBlank()) {
+                            application.getExternalFilesDir(null)?.let { dir ->
+                                val externalFile = java.io.File(dir, "backup_food_logs.json")
+                                if (externalFile.exists()) {
+                                    backupJson = externalFile.readText()
+                                }
+                            }
+                        }
+
+                        if (!backupJson.isNullOrBlank()) {
+                            repository.importFromJson(backupJson)
+                        } else {
+                            // If completely empty, prepopulate sample logs (which will sync to Firestore on insertion)
+                            prepopulateSampleLogs()
+                        }
                     }
                 }
             } catch (t: Throwable) {
-                android.util.Log.e("NutritionViewModel", "Database dynamic check, backup restore or pre-population failed", t)
+                android.util.Log.e("NutritionViewModel", "Firestore initialization or sync failed, falling back to local prepopulation check", t)
+                try {
+                    val existing = repository.allEntries.first()
+                    if (existing.isEmpty()) {
+                        prepopulateSampleLogs()
+                    }
+                } catch (inner: Throwable) {
+                    android.util.Log.e("NutritionViewModel", "Local check failed", inner)
+                }
             }
         }
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            // Keep the SharedPreferences local storage backup in sync with Room database
+            // Keep the SharedPreferences and local storage files backup in sync with Room database
             allLogEntries.collect { entries ->
                 try {
                     val json = repository.exportToJson()
                     sharedPrefs.edit().putString("backup_food_logs", json).apply()
+                    
+                    // Backup to internal filesDir
+                    val internalFile = java.io.File(application.filesDir, "backup_food_logs.json")
+                    internalFile.writeText(json)
+                    
+                    // Backup to external storage (persists across uninstalls and rebuilds)
+                    application.getExternalFilesDir(null)?.let { dir ->
+                        val externalFile = java.io.File(dir, "backup_food_logs.json")
+                        externalFile.writeText(json)
+                    }
                 } catch (e: Exception) {
                     android.util.Log.e("NutritionViewModel", "Auto-saving logs to local storage backup failed", e)
                 }
@@ -356,6 +553,9 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 val standardLabelDef = Nutrients.DEFAULT_DEFINITIONS.find { it.key == key }
                 if (standardLabelDef != null) {
                     com.example.data.Nutrients.updateRda(getApplication(), key, standardLabelDef.rda)
+                    viewModelScope.launch {
+                        repository.updateNutrientRda(key, standardLabelDef.rda)
+                    }
                 }
             }
         } else {
@@ -363,6 +563,9 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
             sharedPrefs.edit().putFloat(key, value.toFloat()).apply()
             // Persist the updated RDA value back to the local JSON-based database structure
             com.example.data.Nutrients.updateRda(getApplication(), key, value)
+            viewModelScope.launch {
+                repository.updateNutrientRda(key, value)
+            }
         }
         _customRdaOverrides.value = current
         _operationMessage.value = "Updated target for ${Nutrients.getByKey(key)?.name ?: key} to ${value.toInt()} ${Nutrients.getByKey(key)?.unit ?: ""}"
@@ -597,6 +800,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         editor.remove("profile_activity")
         editor.remove("profile_sex")
         editor.remove("profile_goal")
+        editor.remove("active_health_preset")
         editor.apply()
 
         // Reset the dynamic local JSON-based database structure to defaults as well
@@ -609,8 +813,93 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         _profileActivity.value = "Lightly Active"
         _profileSex.value = "Female"
         _profileGoal.value = "Balanced / Maintenance"
+        _activeHealthPreset.value = "None"
 
         _operationMessage.value = "All 41 tracked RDA targets reset to standard reference values."
+    }
+
+    fun applyHealthGoalPreset(presetKey: String) {
+        _activeHealthPreset.value = presetKey
+        sharedPrefs.edit().putString("active_health_preset", presetKey).apply()
+
+        val rdaMap = when (presetKey) {
+            "DASH Diet" -> mapOf(
+                "sodium" to 1500.0,
+                "potassium" to 4700.0,
+                "magnesium" to 500.0,
+                "calcium" to 1200.0
+            )
+            "Diabetes Care" -> mapOf(
+                "sugars" to 25.0,
+                "carbohydrates" to 130.0,
+                "fiber" to 35.0
+            )
+            "Prenatal Support" -> mapOf(
+                "folate" to 600.0,
+                "iron" to 27.0,
+                "choline" to 450.0,
+                "calcium" to 1200.0,
+                "vitamin_d" to 20.0,
+                "vitamin_b12" to 2.8
+            )
+            "Bone Health" -> mapOf(
+                "calcium" to 1300.0,
+                "vitamin_d" to 25.0,
+                "vitamin_k" to 150.0,
+                "magnesium" to 420.0
+            )
+            "Anemia Support" -> mapOf(
+                "iron" to 25.0,
+                "vitamin_c" to 200.0,
+                "folate" to 500.0,
+                "vitamin_b12" to 3.0
+            )
+            "Heart Healthy" -> mapOf(
+                "sodium" to 1800.0,
+                "saturated_fat" to 15.0,
+                "omega3" to 2.5,
+                "fiber" to 35.0,
+                "cholesterol" to 150.0
+            )
+            "Vegan Balance" -> mapOf(
+                "iron" to 15.0,
+                "zinc" to 12.0,
+                "vitamin_b12" to 5.0,
+                "vitamin_d" to 20.0,
+                "calcium" to 1100.0
+            )
+            "Immune Booster" -> mapOf(
+                "vitamin_c" to 250.0,
+                "vitamin_d" to 25.0,
+                "zinc" to 15.0,
+                "selenium" to 100.0
+            )
+            else -> emptyMap()
+        }
+
+        if (rdaMap.isNotEmpty()) {
+            val currentOverrides = _customRdaOverrides.value.toMutableMap()
+            val editor = sharedPrefs.edit()
+            
+            rdaMap.forEach { (k, v) ->
+                currentOverrides[k] = v
+                editor.putFloat(k, v.toFloat())
+                
+                // Persist back to local JSON-based database
+                com.example.data.Nutrients.updateRda(getApplication(), k, v)
+                
+                // Update Room database
+                viewModelScope.launch {
+                    repository.updateNutrientRda(k, v)
+                }
+            }
+            
+            editor.apply()
+            _customRdaOverrides.value = currentOverrides
+            _operationMessage.value = "Applied targets for $presetKey protocol!"
+        } else if (presetKey == "None") {
+            _operationMessage.value = "Health goal preset cleared. Custom targets remain active."
+        }
     }
 
     val currentDateEntries: StateFlow<List<FoodLogEntry>> = combine(allLogEntries, currentDate) { entries, date ->
@@ -638,8 +927,8 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 val excesses = statusList.filter { it.definition.isMaxLimit && it.intake > it.definition.rda }
                 val fallbackTip = generateLocalFallbackTips(deficiencies, excesses)
                 
-                val apiKey = try { com.example.BuildConfig.GEMINI_API_KEY } catch (e: Throwable) { "" }
-                val hasValidKey = apiKey.isNotEmpty() && apiKey != "MY_GEMINI_API_KEY" && apiKey != "GEMINI_API_KEY"
+                val apiKey = com.example.data.GeminiAuthHandler.getApiKey()
+                val hasValidKey = apiKey.isNotEmpty()
                 
                 if (hasValidKey) {
                     fetchAiPersonalizedTips(forceGemini = false)
@@ -737,7 +1026,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 daysOfWeek = daysOfWeek,
                 timeOfDay = timeOfDay,
                 notes = notes,
-                nutrients = nutrients
+                nutrients = if (nutrients.isNotEmpty()) nutrients else repository.estimateSupplementNutrients(name, dosage)
             )
             repository.insertSupplement(supplement)
             _operationMessage.value = "Registered supplement: $name"
@@ -769,6 +1058,68 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun logSupplementManual(supplement: com.example.data.Supplement) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val dateStr = _currentDate.value
+            val expectedName = if (supplement.dosage.isNotEmpty()) {
+                "${supplement.name} (${supplement.dosage})"
+            } else {
+                supplement.name
+            }
+            
+            // Check if already logged
+            val existing = repository.getAllEntriesDirect().filter { 
+                it.date == dateStr && 
+                it.mealType == "Supplement" && 
+                (it.foodName.equals(expectedName, ignoreCase = true) || 
+                 it.foodName.equals(supplement.name, ignoreCase = true))
+            }
+            if (existing.isEmpty()) {
+                val calculatedNutrients = if (supplement.nutrients.isNotEmpty()) {
+                    repository.standardizeNutrientKeys(supplement.nutrients)
+                } else {
+                    repository.estimateSupplementNutrients(supplement.name, supplement.dosage)
+                }
+
+                val newLog = com.example.data.FoodLogEntry(
+                    id = 0,
+                    date = dateStr,
+                    foodName = expectedName,
+                    mealType = "Supplement",
+                    quantity = 1.0,
+                    unit = "serving",
+                    nutrients = repository.standardizeNutrientKeys(calculatedNutrients)
+                )
+                repository.insertEntry(newLog)
+                _operationMessage.value = "Logged supplement: ${supplement.name}"
+            }
+        }
+    }
+
+    fun unlogSupplementManual(supplement: com.example.data.Supplement) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val dateStr = _currentDate.value
+            val expectedName = if (supplement.dosage.isNotEmpty()) {
+                "${supplement.name} (${supplement.dosage})"
+            } else {
+                supplement.name
+            }
+            
+            val existing = repository.getAllEntriesDirect().filter { 
+                it.date == dateStr && 
+                it.mealType == "Supplement" && 
+                (it.foodName.equals(expectedName, ignoreCase = true) || 
+                 it.foodName.equals(supplement.name, ignoreCase = true))
+            }
+            for (entry in existing) {
+                repository.deleteEntry(entry)
+            }
+            if (existing.isNotEmpty()) {
+                _operationMessage.value = "Removed log for: ${supplement.name}"
+            }
+        }
+    }
+
     fun clearMessage() {
         _operationMessage.value = null
     }
@@ -779,6 +1130,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var lastDeletedEntry: FoodLogEntry? = null
     private var lastDeletedBatch: List<FoodLogEntry> = emptyList()
+    private var lastAddedEntry: FoodLogEntry? = null
 
     fun deleteLog(entry: FoodLogEntry) {
         viewModelScope.launch {
@@ -801,6 +1153,19 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 batch.forEach { repository.insertEntry(it) }
                 lastDeletedBatch = emptyList()
                 _operationMessage.value = "Restored ${batch.size} entries"
+            }
+        }
+    }
+
+    fun undoLastAddedEntry() {
+        viewModelScope.launch {
+            val entry = lastAddedEntry
+            if (entry != null) {
+                repository.deleteEntry(entry)
+                lastAddedEntry = null
+                _operationMessage.value = "Removed: ${entry.foodName}"
+            } else {
+                _operationMessage.value = "No added entry found to undo"
             }
         }
     }
@@ -856,6 +1221,9 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 val result = repository.parseAndLogFood(input, _currentDate.value, mealType)
                 if (result.isSuccess) {
                     val entry = result.getOrNull()
+                    if (entry != null) {
+                        lastAddedEntry = entry
+                    }
                     _operationMessage.value = "Logged: ${entry?.foodName}"
                 } else {
                     _operationMessage.value = "Failed to parse. Logged standard estimate."
@@ -920,6 +1288,63 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun toggleFavoriteFood(foodName: String, quantity: Double, unit: String, nutrients: Map<String, Double>) {
+        viewModelScope.launch {
+            try {
+                val existing = repository.getFavoriteFoodByName(foodName)
+                if (existing != null) {
+                    repository.deleteFavoriteFood(existing)
+                    _operationMessage.value = "Removed from Favorites: $foodName"
+                } else {
+                    val favorite = com.example.data.FavoriteFood(
+                        foodName = foodName,
+                        quantity = quantity,
+                        unit = unit,
+                        nutrients = nutrients
+                    )
+                    repository.insertFavoriteFood(favorite)
+                    _operationMessage.value = "Added to Favorites: $foodName"
+                }
+            } catch (e: Exception) {
+                _operationMessage.value = "Error favoriting food: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    fun addFavoriteFoodToLog(food: com.example.data.FavoriteFood, mealType: String) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val entry = FoodLogEntry(
+                    foodName = food.foodName,
+                    quantity = food.quantity,
+                    unit = food.unit,
+                    mealType = mealType,
+                    date = _currentDate.value,
+                    nutrients = food.nutrients
+                )
+                val saved = repository.insertEntry(entry)
+                lastAddedEntry = saved
+                _operationMessage.value = "Logged: ${food.foodName}!"
+            } catch (e: Exception) {
+                _operationMessage.value = "Failed to log favorite: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun deleteFavoriteFood(food: com.example.data.FavoriteFood) {
+        viewModelScope.launch {
+            try {
+                repository.deleteFavoriteFood(food)
+                _operationMessage.value = "Deleted favorite food: ${food.foodName}"
+            } catch (e: Exception) {
+                _operationMessage.value = "Error deleting: ${e.localizedMessage}"
+            }
+        }
+    }
+
     fun addManualFoodLog(foodName: String, servingSize: Double, mealType: String, customTimestamp: Long? = null) {
         if (foodName.isBlank()) return
         val timestamp = customTimestamp ?: System.currentTimeMillis()
@@ -934,6 +1359,12 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 // Log to Room Database using our precise fallback/AI parser scaled by servingSize
                 val result = repository.parseAndLogFood("$foodName ($servingSize servings)", dateStr, mealType)
+                if (result.isSuccess) {
+                    val entry = result.getOrNull()
+                    if (entry != null) {
+                        lastAddedEntry = entry
+                    }
+                }
                 
                 val id = java.util.UUID.randomUUID().toString()
                 val newLog = ManualFoodLog(
@@ -946,23 +1377,8 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 )
                 
                 val updatedList = listOf(newLog) + _manualFoodLogs.value
-                _manualFoodLogs.value = updatedList
-                
-                // Persist JSON representation into SharedPreferences "localStorage"
-                val jsonArray = org.json.JSONArray()
-                updatedList.forEach { log ->
-                    val obj = org.json.JSONObject().apply {
-                        put("id", log.id)
-                        put("foodName", log.foodName)
-                        put("servingSize", log.servingSize)
-                        put("mealType", log.mealType)
-                        put("date", log.date)
-                        put("timestamp", log.timestamp)
-                    }
-                    jsonArray.put(obj)
-                }
-                localStorage.edit().putString("manual_logs", jsonArray.toString()).apply()
-                _operationMessage.value = "Stored manually logged food and synced to localStorage!"
+                saveManualFoodLogsToStorage(updatedList)
+                _operationMessage.value = "Logged: $foodName!"
             } catch (e: Exception) {
                 _operationMessage.value = "Local Storage writing error: ${e.message}"
             } finally {
@@ -973,26 +1389,8 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun deleteManualFoodLog(id: String) {
         val updatedList = _manualFoodLogs.value.filter { it.id != id }
-        _manualFoodLogs.value = updatedList
-        
-        try {
-            val jsonArray = org.json.JSONArray()
-            updatedList.forEach { log ->
-                val obj = org.json.JSONObject().apply {
-                    put("id", log.id)
-                    put("foodName", log.foodName)
-                    put("servingSize", log.servingSize)
-                    put("mealType", log.mealType)
-                    put("date", log.date)
-                    put("timestamp", log.timestamp)
-                }
-                jsonArray.put(obj)
-            }
-            localStorage.edit().putString("manual_logs", jsonArray.toString()).apply()
-            _operationMessage.value = "Deleted log item from localStorage!"
-        } catch (e: Exception) {
-            _operationMessage.value = "Local Storage deletion error"
-        }
+        saveManualFoodLogsToStorage(updatedList)
+        _operationMessage.value = "Deleted log item from localStorage!"
     }
 
     fun setOnlineSearchQuery(query: String) {
@@ -1009,7 +1407,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
             _isOnlineSearching.value = true
             _onlineSearchQuery.value = trimmed
             try {
-                val usdaResults = com.example.data.NutritionApiIntegration.searchUsda(
+                val usdaResults = usdaCacheService.searchFoods(
                     query = trimmed,
                     customApiKey = _usdaApiKey.value.takeIf { it.isNotBlank() }
                 )
@@ -1049,9 +1447,10 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                     unit = unit,
                     nutrients = nutrients
                 )
-                repository.insertEntry(entry)
+                val savedEntry = repository.insertEntry(entry)
+                lastAddedEntry = savedEntry
 
-                // 2. Add to manual logs in SharedPreferences so they can view/export it
+                // 2. Add to manual logs in storage so they can view/export it
                 val timestamp = System.currentTimeMillis()
                 val logId = java.util.UUID.randomUUID().toString()
                 val newLog = ManualFoodLog(
@@ -1063,21 +1462,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                     timestamp = timestamp
                 )
                 val updatedList = listOf(newLog) + _manualFoodLogs.value
-                _manualFoodLogs.value = updatedList
-
-                val jsonArray = org.json.JSONArray()
-                updatedList.forEach { log ->
-                    val obj = org.json.JSONObject().apply {
-                        put("id", log.id)
-                        put("foodName", log.foodName)
-                        put("servingSize", log.servingSize)
-                        put("mealType", log.mealType)
-                        put("date", log.date)
-                        put("timestamp", log.timestamp)
-                    }
-                    jsonArray.put(obj)
-                }
-                localStorage.edit().putString("manual_logs", jsonArray.toString()).apply()
+                saveManualFoodLogsToStorage(updatedList)
 
                 _operationMessage.value = "Successfully fetched nutrients from $source and logged: $foodName!"
             } catch (e: Exception) {
@@ -1100,7 +1485,8 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                     unit = unit,
                     nutrients = nutrients
                 )
-                repository.insertEntry(entry)
+                val savedEntry = repository.insertEntry(entry)
+                lastAddedEntry = savedEntry
                 _operationMessage.value = "Successfully logged custom food: $foodName!"
             } catch (e: Exception) {
                 _operationMessage.value = "Failed to log custom food: ${e.localizedMessage}"
@@ -1121,11 +1507,15 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 log
             }
         }
-        _manualFoodLogs.value = updatedList
-        
+        saveManualFoodLogsToStorage(updatedList)
+        _operationMessage.value = "Updated log item in localStorage!"
+    }
+
+    private fun saveManualFoodLogsToStorage(list: List<ManualFoodLog>) {
+        _manualFoodLogs.value = list
         try {
             val jsonArray = org.json.JSONArray()
-            updatedList.forEach { log ->
+            list.forEach { log ->
                 val obj = org.json.JSONObject().apply {
                     put("id", log.id)
                     put("foodName", log.foodName)
@@ -1136,16 +1526,40 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 jsonArray.put(obj)
             }
-            localStorage.edit().putString("manual_logs", jsonArray.toString()).apply()
-            _operationMessage.value = "Updated log item in localStorage!"
+            val json = jsonArray.toString()
+            localStorage.edit().putString("manual_logs", json).apply()
+            
+            // Backup to internal filesDir
+            val internalFile = java.io.File(getApplication<Application>().filesDir, "manual_logs_backup.json")
+            internalFile.writeText(json)
+            
+            // Backup to external storage (persists across browser/emulator reinstalls)
+            getApplication<Application>().getExternalFilesDir(null)?.let { dir ->
+                val externalFile = java.io.File(dir, "manual_logs_backup.json")
+                externalFile.writeText(json)
+            }
         } catch (e: Exception) {
-            _operationMessage.value = "Local Storage update error"
+            android.util.Log.e("NutritionViewModel", "Failed to persist manual_logs backup", e)
         }
     }
 
     private fun loadManualFoodLogs() {
         try {
-            val jsonString = localStorage.getString("manual_logs", null)
+            var jsonString = localStorage.getString("manual_logs", null)
+            if (jsonString.isNullOrBlank()) {
+                val internalFile = java.io.File(getApplication<Application>().filesDir, "manual_logs_backup.json")
+                if (internalFile.exists()) {
+                    jsonString = internalFile.readText()
+                }
+            }
+            if (jsonString.isNullOrBlank()) {
+                getApplication<Application>().getExternalFilesDir(null)?.let { dir ->
+                    val externalFile = java.io.File(dir, "manual_logs_backup.json")
+                    if (externalFile.exists()) {
+                        jsonString = externalFile.readText()
+                    }
+                }
+            }
             if (!jsonString.isNullOrBlank()) {
                 val array = org.json.JSONArray(jsonString)
                 val list = mutableListOf<ManualFoodLog>()
@@ -1207,6 +1621,9 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 val result = repository.parseAndLogBarcode(barcode, _currentDate.value, mealType, quantity)
                 if (result.isSuccess) {
                     val entry = result.getOrNull()
+                    if (entry != null) {
+                        lastAddedEntry = entry
+                    }
                     _operationMessage.value = "Scanned & Logged: ${entry?.foodName} (${quantity} serving(s))"
                 } else {
                     _operationMessage.value = "Failed to parse barcode. Logged backup estimate."
@@ -3224,8 +3641,8 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         _groundedBenefitText.value = null
         _groundedBenefitSources.value = emptyList()
 
-        val apiKey = try { com.example.BuildConfig.GEMINI_API_KEY } catch (e: Throwable) { "" }
-        val hasValidKey = apiKey.isNotEmpty() && apiKey != "MY_GEMINI_API_KEY" && apiKey != "GEMINI_API_KEY"
+        val apiKey = com.example.data.GeminiAuthHandler.getApiKey()
+        val hasValidKey = apiKey.isNotEmpty()
 
         if (!hasValidKey) {
             viewModelScope.launch {
@@ -3264,12 +3681,10 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                         })
                     })
                 }
-                val mediaType = "application/json".toMediaType()
-                val body = reqObj.toString().toRequestBody(mediaType)
-                val request = Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-                    .post(body)
-                    .build()
+                val request = com.example.data.GeminiAuthHandler.buildRequest(
+                    "gemini-3.5-flash:generateContent",
+                    reqObj.toString()
+                )
 
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     okHttpClient.newCall(request).execute().use { response ->
@@ -3342,8 +3757,8 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         val date = currentDate.value
 
         viewModelScope.launch {
-            val apiKey = try { com.example.BuildConfig.GEMINI_API_KEY } catch (e: Throwable) { "" }
-            val hasValidKey = apiKey.isNotEmpty() && apiKey != "MY_GEMINI_API_KEY" && apiKey != "GEMINI_API_KEY"
+            val apiKey = com.example.data.GeminiAuthHandler.getApiKey()
+            val hasValidKey = apiKey.isNotEmpty()
 
             if (!hasValidKey) {
                 _isAiLoading.value = true
@@ -3390,12 +3805,10 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                         })
                     })
                 }
-                val mediaType = "application/json".toMediaType()
-                val body = reqObj.toString().toRequestBody(mediaType)
-                val request = Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-                    .post(body)
-                    .build()
+                val request = com.example.data.GeminiAuthHandler.buildRequest(
+                    "gemini-3.5-flash:generateContent",
+                    reqObj.toString()
+                )
 
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     okHttpClient.newCall(request).execute().use { response ->
@@ -3434,8 +3847,8 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
             .sortedBy { it.percentage }
 
         viewModelScope.launch {
-            val apiKey = try { com.example.BuildConfig.GEMINI_API_KEY } catch (e: Throwable) { "" }
-            val hasValidKey = apiKey.isNotEmpty() && apiKey != "MY_GEMINI_API_KEY" && apiKey != "GEMINI_API_KEY"
+            val apiKey = com.example.data.GeminiAuthHandler.getApiKey()
+            val hasValidKey = apiKey.isNotEmpty()
 
             if (!hasValidKey) {
                 _isSuggestionsLoading.value = true
@@ -3478,12 +3891,10 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                         })
                     })
                 }
-                val mediaType = "application/json".toMediaType()
-                val body = reqObj.toString().toRequestBody(mediaType)
-                val request = Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
-                    .post(body)
-                    .build()
+                val request = com.example.data.GeminiAuthHandler.buildRequest(
+                    "gemini-3.5-flash:generateContent",
+                    reqObj.toString()
+                )
 
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     okHttpClient.newCall(request).execute().use { response ->
@@ -3538,6 +3949,210 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun fetchRecipeSuggestions(query: String, forceGemini: Boolean = false) {
+        val statusList = dailyNutrients.value
+        val deficiencies = statusList.filter { 
+            !it.definition.isMaxLimit && 
+            it.percentage < 100.0 && 
+            it.definition.rda > 0.0 
+        }.sortedBy { it.percentage }
+
+        val deficienciesStrings = deficiencies.map { 
+            "${it.definition.name}: ${it.percentage.toInt()}% met (${it.intake.toInt()}/${it.definition.rda.toInt()}${it.definition.unit})" 
+        }
+
+        viewModelScope.launch {
+            val apiKey = com.example.data.GeminiAuthHandler.getApiKey()
+            val hasValidKey = apiKey.isNotEmpty()
+
+            val trimmedQuery = query.trim()
+
+            if (!hasValidKey) {
+                _isRecipesLoading.value = true
+                kotlinx.coroutines.delay(400)
+                _aiSuggestedRecipes.value = generateOfflineRecipes(deficienciesStrings, trimmedQuery)
+                _isRecipesLoading.value = false
+                if (forceGemini) {
+                    _recipesError.value = "Gemini API key is not configured. Showing smart fallback suggestions."
+                }
+                return@launch
+            }
+
+            _isRecipesLoading.value = true
+            _recipesError.value = null
+
+            val gapsText = if (deficienciesStrings.isEmpty()) "None - All goals progressing well!" else deficienciesStrings.joinToString("\n") { "• $it" }
+
+            val prompt = """
+                You are NutriScribe's elite AI chef and clinical nutritionist.
+                Recommend exactly 3 specific, detailed recipes that match the user's search query "$trimmedQuery" (or generally high-density nourishing recipes if the search query is empty/broad), and are specifically designed to replenish the nutrients where the user currently has an RDA deficiency.
+                
+                Current RDA Gaps / Missing Nutrients:
+                $gapsText
+                
+                Each recommended recipe should prioritize ingredients that are common, raw or whole foods, which can be found in the USDA FoodData Central database.
+                
+                Respond ONLY with a valid raw JSON array containing exactly 3 recipe objects. Do not wrap the JSON in ```json or ``` or any markdown text.
+                Each recipe object in the array must have exactly these keys (and the values must be correctly typed as specified below):
+                - "recipeName": (string) e.g. "Iron-Boost spinach & sesame chicken bowl"
+                - "description": (string, 1-2 sentence overview explaining how this recipe addresses their deficiencies) e.g. "A savory sesame bowl featuring dark leafy greens and tender poultry, packed with easily absorbed heme iron and vitamin C to enhance mineral uptake."
+                - "targetedNutrients": (string, comma-separated list of the key deficient nutrients this recipe targets) e.g. "Iron, Vitamin C, Protein"
+                - "ingredients": (array of strings, where each item is a single ingredient with its measurement) e.g. ["150g Fresh Baby Spinach", "200g Grilled Chicken Breast", "1 tbsp Sesame Seeds", "1 tsp Olive Oil"]
+                - "instructions": (array of strings, listing the clear cooking steps) e.g. ["Thoroughly wash the fresh baby spinach and arrange in a serving bowl.", "Sauté chicken breast with olive oil in a hot pan until cooked through.", "Slice chicken and place on spinach, then sprinkle with toasted sesame seeds and sesame oil."]
+                - "prepTime": (string, total estimated prep & cook time) e.g. "15 minutes"
+            """.trimIndent()
+
+            try {
+                val reqObj = org.json.JSONObject().apply {
+                    put("contents", org.json.JSONArray().apply {
+                        put(org.json.JSONObject().apply {
+                            put("parts", org.json.JSONArray().apply {
+                                put(org.json.JSONObject().apply {
+                                    put("text", prompt)
+                                })
+                            })
+                        })
+                    })
+                }
+                val request = com.example.data.GeminiAuthHandler.buildRequest(
+                    "gemini-3.5-flash:generateContent",
+                    reqObj.toString()
+                )
+
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    okHttpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val responseBody = response.body?.string() ?: ""
+                            val root = org.json.JSONObject(responseBody)
+                            val candidates = root.getJSONArray("candidates")
+                            if (candidates.length() > 0) {
+                                var reply = candidates.getJSONObject(0)
+                                    .getJSONObject("content")
+                                    .getJSONArray("parts")
+                                    .getJSONObject(0)
+                                    .getString("text")
+
+                                if (reply.contains("```json")) {
+                                    reply = reply.substringAfter("```json").substringBefore("```")
+                                } else if (reply.contains("```")) {
+                                    reply = reply.substringAfter("```").substringBefore("```")
+                                }
+                                reply = reply.trim()
+
+                                val parsedArray = org.json.JSONArray(reply)
+                                val list = mutableListOf<AiRecipeSuggestion>()
+                                for (i in 0 until parsedArray.length()) {
+                                    val obj = parsedArray.getJSONObject(i)
+                                    
+                                    val ingArray = obj.getJSONArray("ingredients")
+                                    val ingredientsList = mutableListOf<String>()
+                                    for (j in 0 until ingArray.length()) {
+                                        ingredientsList.add(ingArray.getString(j))
+                                    }
+                                    
+                                    val instArray = obj.getJSONArray("instructions")
+                                    val instructionsList = mutableListOf<String>()
+                                    for (j in 0 until instArray.length()) {
+                                        instructionsList.add(instArray.getString(j))
+                                    }
+                                    
+                                    list.add(
+                                        AiRecipeSuggestion(
+                                            recipeName = obj.optString("recipeName", ""),
+                                            description = obj.optString("description", ""),
+                                            targetedNutrients = obj.optString("targetedNutrients", ""),
+                                            ingredients = ingredientsList,
+                                            instructions = instructionsList,
+                                            prepTime = obj.optString("prepTime", "")
+                                        )
+                                    )
+                                }
+                                _aiSuggestedRecipes.value = list
+                            } else {
+                                _recipesError.value = "Unable to process Gemini recipe recommendations structure."
+                                _aiSuggestedRecipes.value = generateOfflineRecipes(deficienciesStrings, trimmedQuery)
+                            }
+                        } else {
+                            _recipesError.value = "Gemini Service returned error ${response.code}"
+                            _aiSuggestedRecipes.value = generateOfflineRecipes(deficienciesStrings, trimmedQuery)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                _recipesError.value = "Gemini API Connection Error: ${e.localizedMessage}"
+                _aiSuggestedRecipes.value = generateOfflineRecipes(deficienciesStrings, trimmedQuery)
+            } finally {
+                _isRecipesLoading.value = false
+            }
+        }
+    }
+
+    fun generateOfflineRecipes(deficiencies: List<String>, query: String): List<AiRecipeSuggestion> {
+        val trimmed = query.lowercase().trim()
+        val allRecipes = listOf(
+            AiRecipeSuggestion(
+                recipeName = "Super-Greens Iron & Vitamin C Salad",
+                description = "An iron-packed bowl combining tender spinach, toasted sunflower seeds, and citrus dressing designed to maximize iron bioavailability using organic nutrients.",
+                targetedNutrients = "Iron, Vitamin C, Dietary Fiber, Magnesium",
+                ingredients = listOf("150g Fresh Spinach", "30g Sunflower Seeds", "1 Medium Orange (segmented)", "1 tbsp Extra Virgin Olive Oil"),
+                instructions = listOf(
+                    "Wash spinach leaves thoroughly and dry them.",
+                    "Toast sunflower seeds in a dry pan over medium heat for 2-3 minutes until golden.",
+                    "Toss spinach, orange segments, and seeds together.",
+                    "Drizzle with cold-pressed olive oil and fresh orange juice."
+                ),
+                prepTime = "10 mins"
+            ),
+            AiRecipeSuggestion(
+                recipeName = "Creamy Chia & Greek Yogurt Protein Parfait",
+                description = "Rich in calcium, vitamin D, and high-quality protein to support muscle recovery and dense bone matrices.",
+                targetedNutrients = "Calcium, Protein, Phosphorus, Riboflavin",
+                ingredients = listOf("200g Plain Greek Yogurt", "2 tbsp Whole Chia Seeds", "100g Fresh Blueberries", "1 tbsp Pure Honey"),
+                instructions = listOf(
+                    "Mix chia seeds into Greek yogurt and let sit for 5 minutes to bloom.",
+                    "Layer the chia-yogurt mixture with fresh blueberries in a glass.",
+                    "Drizzle with pure organic honey before serving cold."
+                ),
+                prepTime = "8 mins"
+            ),
+            AiRecipeSuggestion(
+                recipeName = "Sesame Garlic Salmon & Steamed Broccoli Bowl",
+                description = "High in premium omega-3 fatty acids, potassium, and vitamin D to stimulate arterial and skeletal wellness.",
+                targetedNutrients = "Vitamin D, Potassium, Omega-3, Protein",
+                ingredients = listOf("150g Wild-Caught Salmon Fillet", "150g Broccoli Florets", "1 tbsp Sesame Seeds", "1 tbsp Soy Sauce (Low Sodium)"),
+                instructions = listOf(
+                    "Season salmon lightly and pan-sear or bake for 10-12 minutes until flaky.",
+                    "Steam broccoli florets until tender-crisp (approx. 5 minutes).",
+                    "Arrange salmon and broccoli in a bowl, drizzle with low-sodium soy sauce, and garnish with sesame seeds."
+                ),
+                prepTime = "15 mins"
+            ),
+            AiRecipeSuggestion(
+                recipeName = "Savory Lentil & Spinach Sauté",
+                description = "An iron and zinc powerhouse perfect for maintaining red blood cell synthesis and metabolic immune defense.",
+                targetedNutrients = "Iron, Zinc, Folate, Protein, Fiber",
+                ingredients = listOf("1 cup Cooked Lentils", "100g Baby Spinach", "1 clove Minced Garlic", "1 tsp Olive Oil"),
+                instructions = listOf(
+                    "Heat olive oil in a skillet and sauté minced garlic until fragrant.",
+                    "Add cooked brown lentils and warm through.",
+                    "Toss in baby spinach and cook until wilted (about 2 minutes).",
+                    "Season with a pinch of sea salt and freshly cracked black pepper."
+                ),
+                prepTime = "12 mins"
+            )
+        )
+        
+        val filtered = allRecipes.filter { recipe ->
+            trimmed.isEmpty() || 
+            recipe.recipeName.lowercase().contains(trimmed) || 
+            recipe.description.lowercase().contains(trimmed) || 
+            recipe.targetedNutrients.lowercase().contains(trimmed) ||
+            recipe.ingredients.any { it.lowercase().contains(trimmed) }
+        }
+        
+        return if (filtered.isNotEmpty()) filtered.take(3) else allRecipes.take(3)
+    }
+
     fun generateOfflineFoodSuggestions(deficiencies: List<NutrientStatus>): List<FoodSuggestion> {
         val list = mutableListOf<FoodSuggestion>()
         if (deficiencies.isEmpty()) {
@@ -3580,6 +4195,260 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
         }
+        return list
+    }
+
+    fun logPlannedMeal(plannedId: String) {
+        val currentList = _plannedMenu.value
+        val meal = currentList.find { it.id == plannedId } ?: return
+        if (meal.isLogged) return
+        
+        // Log the food
+        addFoodLog(meal.foodName, meal.mealType)
+        
+        // Update state
+        _plannedMenu.value = currentList.map {
+            if (it.id == plannedId) it.copy(isLogged = true) else it
+        }
+    }
+
+    fun generateDirectedMenu(selectedUsuals: List<String>) {
+        val statusList = dailyNutrients.value
+        val deficiencies = statusList.filter { !it.definition.isMaxLimit && it.percentage < 100.0 && it.definition.rda > 0.0 }
+            .sortedBy { it.percentage }
+            
+        viewModelScope.launch {
+            _isPlanningLoading.value = true
+            _planningError.value = null
+            
+            val apiKey = com.example.data.GeminiAuthHandler.getApiKey()
+            val hasValidKey = apiKey.isNotEmpty()
+            
+            if (!hasValidKey) {
+                // Generate offline fallback menu
+                kotlinx.coroutines.delay(800)
+                _plannedMenu.value = generateOfflineDirectedMenu(selectedUsuals, deficiencies)
+                _isPlanningLoading.value = false
+                return@launch
+            }
+            
+            val deficiencyStr = if (deficiencies.isEmpty()) {
+                "None - All nutrient goals are met for today!"
+            } else {
+                deficiencies.joinToString("\n") { "• ${it.definition.name}: ${it.percentage.toInt()}% met (${it.intake.toInt()}/${it.definition.rda.toInt()}${it.definition.unit})" }
+            }
+            
+            val usualsFormatted = if (selectedUsuals.isEmpty()) "None specified." else selectedUsuals.joinToString("\n") { "• $it" }
+            
+            val prompt = """
+                You are NutriScribe's Elite AI Clinical Nutritionist.
+                Your task is to design a personalized daily meal plan (Menu) for today.
+                The user has specified these "Usual / Favorite" meals/foods to include first as their baseline (with their specified meal type, e.g. 'Eggs (Breakfast)'):
+                $usualsFormatted
+                
+                Current Daily Nutrient Deficiencies to solve:
+                $deficiencyStr
+                
+                You MUST output a valid JSON array containing EXACTLY 4 planned meal objects: one for "Breakfast", one for "Lunch", one for "Dinner", and one for "Snack".
+                Rule 1: If a "Usual" baseline meal is provided for a specific meal type (e.g., Breakfast or Dinner), keep that usual meal exactly for that meal type (is_usual = true).
+                Rule 2: If a meal type does NOT have a "Usual" baseline meal, you must suggest a healthy, nutritionally rich meal for that slot (is_usual = false).
+                Rule 3: You MUST suggest a delicious, high-density Snack to keep their energy up, cover micro-nutrient gaps, and make a real difference in correcting their deficits. Do NOT forget the snack.
+                
+                Respond ONLY with a valid raw JSON array of 4 objects. Do not wrap the JSON in ```json or ``` or any markdown text. Each of the 4 objects in the JSON array must have exactly these keys:
+                - "id": (string, unique id, e.g. "breakfast_1", "snack_1")
+                - "meal_type": (string, exactly "Breakfast", "Lunch", "Dinner", or "Snack")
+                - "food_name": (string, name of the food/meal)
+                - "is_usual": (boolean, true if this is one of the user's usuals, false if suggested by AI)
+                - "calories": (integer, estimated calorie count)
+                - "protein": (integer, estimated protein in grams)
+                - "carbs": (integer, estimated carbohydrates in grams)
+                - "fat": (integer, estimated fat in grams)
+                - "reason": (string, concise explanation of how this meal addresses their nutrient gaps and supports their dietary requirements, e.g. "Rich in Vitamin D and iron to correct your current 45% deficiency.")
+            """.trimIndent()
+            
+            try {
+                val reqObj = org.json.JSONObject().apply {
+                    put("contents", org.json.JSONArray().apply {
+                        put(org.json.JSONObject().apply {
+                            put("parts", org.json.JSONArray().apply {
+                                put(org.json.JSONObject().apply {
+                                    put("text", prompt)
+                                })
+                            })
+                        })
+                    })
+                }
+                val request = com.example.data.GeminiAuthHandler.buildRequest(
+                    "gemini-3.5-flash:generateContent",
+                    reqObj.toString()
+                )
+                    
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    okHttpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val responseBody = response.body?.string() ?: ""
+                            val root = org.json.JSONObject(responseBody)
+                            val candidates = root.getJSONArray("candidates")
+                            if (candidates.length() > 0) {
+                                var reply = candidates.getJSONObject(0)
+                                    .getJSONObject("content")
+                                    .getJSONArray("parts")
+                                    .getJSONObject(0)
+                                    .getString("text")
+                                    
+                                if (reply.contains("```json")) {
+                                    reply = reply.substringAfter("```json").substringBefore("```")
+                                } else if (reply.contains("```")) {
+                                    reply = reply.substringAfter("```").substringBefore("```")
+                                }
+                                reply = reply.trim()
+                                
+                                val parsedArray = org.json.JSONArray(reply)
+                                val list = mutableListOf<PlannedMeal>()
+                                for (i in 0 until parsedArray.length()) {
+                                    val obj = parsedArray.getJSONObject(i)
+                                    list.add(
+                                        PlannedMeal(
+                                            id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                                            mealType = obj.optString("meal_type", "Snack"),
+                                            foodName = obj.optString("food_name", ""),
+                                            isUsual = obj.optBoolean("is_usual", false),
+                                            calories = obj.optInt("calories", 0),
+                                            protein = obj.optInt("protein", 0),
+                                            carbs = obj.optInt("carbs", 0),
+                                            fat = obj.optInt("fat", 0),
+                                            reason = obj.optString("reason", "")
+                                        )
+                                    )
+                                }
+                                _plannedMenu.value = list
+                            } else {
+                                _planningError.value = "Unable to process Gemini suggestions structure."
+                                _plannedMenu.value = generateOfflineDirectedMenu(selectedUsuals, deficiencies)
+                            }
+                        } else {
+                            _planningError.value = "Gemini Service returned error ${response.code}"
+                            _plannedMenu.value = generateOfflineDirectedMenu(selectedUsuals, deficiencies)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                _planningError.value = "Gemini API Connection Error: ${e.localizedMessage}"
+                _plannedMenu.value = generateOfflineDirectedMenu(selectedUsuals, deficiencies)
+            } finally {
+                _isPlanningLoading.value = false
+            }
+        }
+    }
+
+    fun generateOfflineDirectedMenu(selectedUsuals: List<String>, deficiencies: List<NutrientStatus>): List<PlannedMeal> {
+        val list = mutableListOf<PlannedMeal>()
+        
+        val usualsMap = mutableMapOf<String, String>()
+        selectedUsuals.forEach { usual ->
+            val lower = usual.lowercase()
+            when {
+                lower.contains("breakfast") -> usualsMap["Breakfast"] = usual.substringBefore(" (Breakfast)").trim()
+                lower.contains("lunch") -> usualsMap["Lunch"] = usual.substringBefore(" (Lunch)").trim()
+                lower.contains("dinner") -> usualsMap["Dinner"] = usual.substringBefore(" (Dinner)").trim()
+                lower.contains("snack") -> usualsMap["Snack"] = usual.substringBefore(" (Snack)").trim()
+                else -> {
+                    if (!usualsMap.containsKey("Breakfast")) usualsMap["Breakfast"] = usual
+                    else if (!usualsMap.containsKey("Lunch")) usualsMap["Lunch"] = usual
+                    else if (!usualsMap.containsKey("Dinner")) usualsMap["Dinner"] = usual
+                    else usualsMap["Snack"] = usual
+                }
+            }
+        }
+        
+        val mealTypes = listOf("Breakfast", "Lunch", "Dinner", "Snack")
+        
+        mealTypes.forEach { type ->
+            if (usualsMap.containsKey(type)) {
+                val foodName = usualsMap[type] ?: ""
+                list.add(
+                    PlannedMeal(
+                        id = type.lowercase() + "_usual",
+                        mealType = type,
+                        foodName = foodName,
+                        isUsual = true,
+                        calories = 350,
+                        protein = 15,
+                        carbs = 40,
+                        fat = 12,
+                        reason = "Incorporated your usual / favorite meal choice as specified."
+                    )
+                )
+            } else {
+                when (type) {
+                    "Breakfast" -> {
+                        list.add(
+                            PlannedMeal(
+                                id = "breakfast_sug",
+                                mealType = "Breakfast",
+                                foodName = "Greek Yogurt with Blueberries, Honey & Chia Seeds",
+                                isUsual = false,
+                                calories = 310,
+                                protein = 22,
+                                carbs = 38,
+                                fat = 7,
+                                reason = "Soluble fiber and protein packed starter providing natural calcium to support your bone baseline density."
+                            )
+                        )
+                    }
+                    "Lunch" -> {
+                        val hasIronDef = deficiencies.any { it.definition.key == "iron" }
+                        val food = if (hasIronDef) "Lean Steak strips with Quinoa & Steamed Spinach" else "Grilled Chicken Breast Bowl with Quinoa & Spinach"
+                        list.add(
+                            PlannedMeal(
+                                id = "lunch_sug",
+                                mealType = "Lunch",
+                                foodName = food,
+                                isUsual = false,
+                                calories = 490,
+                                protein = 38,
+                                carbs = 46,
+                                fat = 11,
+                                reason = "Packed with bioavailable iron, fiber, and clean protein to help correct active daily deficits."
+                            )
+                        )
+                    }
+                    "Dinner" -> {
+                        val hasVitDDef = deficiencies.any { it.definition.key == "vitamin_d" }
+                        val food = if (hasVitDDef) "Wild Salmon fillet with Roasted Broccoli & Sweet Potatoes" else "Grilled Sea Bass with Quinoa & Asparagus"
+                        list.add(
+                            PlannedMeal(
+                                id = "dinner_sug",
+                                mealType = "Dinner",
+                                foodName = food,
+                                isUsual = false,
+                                calories = 520,
+                                protein = 41,
+                                carbs = 42,
+                                fat = 15,
+                                reason = "Rich in Vitamin D3, magnesium, and essential Omega-3 fatty acids crucial to optimize skeletal and cardiac parameters."
+                            )
+                        )
+                    }
+                    "Snack" -> {
+                        list.add(
+                            PlannedMeal(
+                                id = "snack_sug",
+                                mealType = "Snack",
+                                foodName = "A cup of sliced Apple with 2 tbsp of Creamy Almond Butter",
+                                isUsual = false,
+                                calories = 240,
+                                protein = 7,
+                                carbs = 25,
+                                fat = 14,
+                                reason = "Provides clean magnesium, healthy fats, and high fiber to support neurological health and metabolic stability."
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        
         return list
     }
 
@@ -3858,11 +4727,28 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
 
     // Helper mapping extensions
     private fun StateFlow<List<FoodLogEntry>>.mapToNutrientStatus(): StateFlow<List<NutrientStatus>> {
-        return combine(this, customRdaOverrides) { entries, overrides ->
+        return combine(this, customRdaOverrides, repository.allNutrients) { entries, overrides, dbNutrientsList ->
             val totals = mutableMapOf<String, Double>()
             
+            // If dbNutrientsList is empty, fall back to Nutrients.DEFINITIONS
+            val activeDefinitions = if (dbNutrientsList.isNotEmpty()) {
+                dbNutrientsList.map { entity ->
+                    com.example.data.NutrientDefinition(
+                        key = entity.key,
+                        name = entity.name,
+                        group = entity.group,
+                        rda = entity.rda,
+                        unit = entity.unit,
+                        isMaxLimit = entity.isMaxLimit,
+                        description = entity.description
+                    )
+                }
+            } else {
+                com.example.data.Nutrients.DEFINITIONS
+            }
+
             // Init all to 0.0
-            for (definition in Nutrients.DEFINITIONS) {
+            for (definition in activeDefinitions) {
                 totals[definition.key] = 0.0
             }
 
@@ -3873,7 +4759,7 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
 
-            Nutrients.DEFINITIONS.map { definition ->
+            activeDefinitions.map { definition ->
                 val rdaValue = overrides[definition.key] ?: definition.rda
                 val sum = totals[definition.key] ?: 0.0
                 val percent = if (rdaValue > 0) (sum / rdaValue) * 100.0 else 0.0
@@ -4274,7 +5160,21 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
             }
             array.put(obj)
         }
-        sharedPrefs.edit().putString("local_custom_foods", array.toString()).apply()
+        val json = array.toString()
+        sharedPrefs.edit().putString("local_custom_foods", json).apply()
+        try {
+            // Backup to internal filesDir
+            val internalFile = java.io.File(getApplication<Application>().filesDir, "local_custom_foods_backup.json")
+            internalFile.writeText(json)
+            
+            // Backup to external storage (persists across reinstalls)
+            getApplication<Application>().getExternalFilesDir(null)?.let { dir ->
+                val externalFile = java.io.File(dir, "local_custom_foods_backup.json")
+                externalFile.writeText(json)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("NutritionViewModel", "Failed to save local_custom_foods to files", e)
+        }
     }
 
     fun addCustomFoodItem(name: String, portionSize: Double, unit: String) {
@@ -4382,4 +5282,26 @@ data class FoodSuggestion(
     val denseNutrients: String,
     val contentMeasure: String,
     val explanation: String
+)
+
+data class AiRecipeSuggestion(
+    val recipeName: String,
+    val description: String,
+    val targetedNutrients: String,
+    val ingredients: List<String>,
+    val instructions: List<String>,
+    val prepTime: String
+)
+
+data class PlannedMeal(
+    val id: String,
+    val mealType: String,
+    val foodName: String,
+    val isUsual: Boolean,
+    val calories: Int,
+    val protein: Int,
+    val carbs: Int,
+    val fat: Int,
+    val reason: String,
+    val isLogged: Boolean = false
 )

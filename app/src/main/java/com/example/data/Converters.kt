@@ -50,4 +50,19 @@ class Converters {
         if (map == null) return "{}"
         return adapter.toJson(map)
     }
+
+    @TypeConverter
+    fun fromNutrientGroup(value: NutrientGroup?): String {
+        return value?.name ?: NutrientGroup.OTHERS.name
+    }
+
+    @TypeConverter
+    fun toNutrientGroup(value: String?): NutrientGroup {
+        if (value == null) return NutrientGroup.OTHERS
+        return try {
+            NutrientGroup.valueOf(value)
+        } catch (e: Exception) {
+            NutrientGroup.OTHERS
+        }
+    }
 }

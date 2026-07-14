@@ -115,7 +115,8 @@ namespace DesktopNutritionTracker.ViewModels
             else if (SelectedTimePeriod == "Quarterly (90 Days)") daysCount = 90;
 
             // Anchor center date around CurrentDateString
-            if (!DateTime.TryParse(_parent.CurrentDateString, out var anchorDate))
+            DateTime anchorDate;
+            if (!DateTime.TryParse(_parent.CurrentDateString, out anchorDate))
             {
                 anchorDate = DateTime.Today;
             }
@@ -131,7 +132,8 @@ namespace DesktopNutritionTracker.ViewModels
             var currentNutrient = SelectedNutrient;
 
             double target = currentNutrient.Rda;
-            if (overrides != null && overrides.TryGetValue(currentNutrient.Key, out double customVal))
+            double customVal;
+            if (overrides != null && overrides.TryGetValue(currentNutrient.Key, out customVal))
             {
                 target = customVal;
             }
@@ -151,7 +153,8 @@ namespace DesktopNutritionTracker.ViewModels
 
                 // Get daily complete computed intake from food history and supplements
                 var dailyEntry = NutritionEntry.ComputeForDate(dateStr, db.FoodEntries, _parent.Supplements, db.TakenSupplementsForToday);
-                double val = dailyEntry.Nutrients.TryGetValue(currentNutrient.Key, out double intakeVal) ? intakeVal : 0.0;
+                double intakeVal;
+                double val = dailyEntry.Nutrients.TryGetValue(currentNutrient.Key, out intakeVal) ? intakeVal : 0.0;
 
                 double cal = dailyEntry.Calories;
                 double carbs = dailyEntry.Carbohydrates;
@@ -219,13 +222,15 @@ namespace DesktopNutritionTracker.ViewModels
                 {
                     string dateStr = date.ToString("yyyy-MM-dd");
                     var dailyEntry = NutritionEntry.ComputeForDate(dateStr, db.FoodEntries, _parent.Supplements, db.TakenSupplementsForToday);
-                    double val = dailyEntry.Nutrients.TryGetValue(def.Key, out double intakeVal) ? intakeVal : 0.0;
+                    double intakeVal;
+                    double val = dailyEntry.Nutrients.TryGetValue(def.Key, out intakeVal) ? intakeVal : 0.0;
                     sum += val;
                 }
                 double avg = daysCount > 0 ? sum / daysCount : 0.0;
 
                 double targetVal = def.Rda;
-                if (overrides != null && overrides.TryGetValue(def.Key, out double customVal))
+                double customVal;
+                if (overrides != null && overrides.TryGetValue(def.Key, out customVal))
                 {
                     targetVal = customVal;
                 }

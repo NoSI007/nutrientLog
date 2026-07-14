@@ -74,6 +74,37 @@ class ExampleRobolectricTest {
   }
 
   @Test
+  fun `test multi-max key standardization maps successfully`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val viewModel = NutritionViewModel(context as Application)
+    val repo = viewModel.repository
+    
+    val rawKeysMap = mapOf(
+        "Vitamin_D_(D3)µg" to 5.0,
+        "Vitamin_E_mg" to 50.0,
+        "Vitamin_K_(K1)µg" to 20.0,
+        "Vitamin_C_mg" to 100.0,
+        "Folic_Acid_µg" to 400.0,
+        "Vitamin_B12_µg" to 50.0,
+        "Magnesium_300mg" to 300.0,
+        "Iron_mg" to 14.0,
+        "Zinc_mg" to 15.0
+    )
+    
+    val standardized = repo.standardizeNutrientKeys(rawKeysMap)
+    
+    assertEquals(5.0, standardized["vitamin_d"]!!, 0.001)
+    assertEquals(50.0, standardized["vitamin_e"]!!, 0.001)
+    assertEquals(20.0, standardized["vitamin_k"]!!, 0.001)
+    assertEquals(100.0, standardized["vitamin_c"]!!, 0.001)
+    assertEquals(400.0, standardized["folate"]!!, 0.001)
+    assertEquals(50.0, standardized["vitamin_b12"]!!, 0.001)
+    assertEquals(300.0, standardized["magnesium"]!!, 0.001)
+    assertEquals(14.0, standardized["iron"]!!, 0.001)
+    assertEquals(15.0, standardized["zinc"]!!, 0.001)
+  }
+
+  @Test
   fun `test navigation and clicking through all tabs`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val viewModel = NutritionViewModel(context as Application)
@@ -427,6 +458,83 @@ class ExampleRobolectricTest {
         throw e
       }
     }
+  }
+
+  @Test
+  fun `test clinical preset application and resetting`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val viewModel = NutritionViewModel(context as Application)
+    
+    // Assert active preset is default "None"
+    assertEquals("None", viewModel.activeHealthPreset.value)
+    
+    // Apply "Diabetes Care"
+    viewModel.applyHealthGoalPreset("Diabetes Care")
+    assertEquals("Diabetes Care", viewModel.activeHealthPreset.value)
+    
+    // Check specific nutrient override
+    val overrides = viewModel.customRdaOverrides.value
+    assertEquals(25.0, overrides["sugars"] ?: 0.0, 0.01)
+    assertEquals(130.0, overrides["carbohydrates"] ?: 0.0, 0.01)
+    assertEquals(35.0, overrides["fiber"] ?: 0.0, 0.01)
+    
+    // Deactivate Preset
+    viewModel.applyHealthGoalPreset("None")
+    assertEquals("None", viewModel.activeHealthPreset.value)
+  }
+
+  @Test
+  fun `test usda cache service retrieval and storage`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val cacheService = com.example.data.UsdaCacheService(context)
+
+    // Clear any previous cache
+    cacheService.clearCache()
+
+    val db = com.example.data.AppDatabase.getDatabase(context)
+    val dao = db.usdaCacheDao()
+
+    val testKey = "search:test_food"
+    val dummyJson = """
+      [
+        {
+          "id": "99999",
+          "name": "Cached Test Food",
+          "brandName": "Test Brand",
+          "servingSize": 100.0,
+          "servingSizeUnit": "g",
+          "source": "USDA",
+          "nutrients": {
+            "calories": 150.0,
+            "protein": 10.0,
+            "carbohydrates": 20.0,
+            "fat": 5.0
+          }
+        }
+      ]
+    """.trimIndent()
+
+    dao.insertCache(
+      com.example.data.UsdaCacheEntity(
+        cacheKey = testKey,
+        cachedResponseJson = dummyJson,
+        timestamp = System.currentTimeMillis()
+      )
+    )
+
+    // Verify cache service returns our cached result instantly
+    val results = cacheService.searchFoods("test_food")
+    assertEquals(1, results.size)
+    assertEquals("99999", results[0].id)
+    assertEquals("Cached Test Food", results[0].name)
+    assertEquals("Test Brand", results[0].brandName)
+    assertEquals(150.0, results[0].nutrients["calories"] ?: 0.0, 0.01)
+    assertEquals(10.0, results[0].nutrients["protein"] ?: 0.0, 0.01)
+
+    // Clear the cache and verify evictions
+    cacheService.clearCache()
+    val clearedResults = dao.getCacheByKey(testKey)
+    assert(clearedResults == null)
   }
 }
 

@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using DesktopNutritionTracker.Models;
+using DesktopNutritionTracker.Services;
 using DesktopNutritionTracker.ViewModels;
 
 namespace DesktopNutritionTracker
@@ -12,13 +14,22 @@ namespace DesktopNutritionTracker
     public partial class MainWindow : Window
     {
         private readonly NutritionViewModel _viewModel;
+        private readonly LocalHttpEndpointService _apiEndpointService;
         private const string PlaceholderText = "Example: Steak, broccoli or eggs...";
+        private bool _isRefreshing = false;
 
         public MainWindow()
         {
             InitializeComponent();
             _viewModel = new NutritionViewModel();
             this.DataContext = _viewModel;
+
+            // Start local REST API server endpoint for frontend charting/external consumers
+            _apiEndpointService = new LocalHttpEndpointService();
+            _apiEndpointService.Start();
+
+            // Gracefully stop the REST API listener when WPF window is closed
+            this.Closed += (s, e) => _apiEndpointService.Stop();
 
             // Bind ViewModel messages update triggers
             _viewModel.PropertyChanged += ViewModel_PropertyChanged;
@@ -51,17 +62,26 @@ namespace DesktopNutritionTracker
 
         private void RefreshListViews()
         {
-            NutrientsListView.ItemsSource = _viewModel.NutrientStatuses;
-            FoodJournalListView.ItemsSource = _viewModel.CurrentDayFood;
-            StapleListView.ItemsSource = null;
-            StapleListView.ItemsSource = _viewModel.RecurringFoods;
-            RdaListEditor.ItemsSource = Nutrients.Definitions;
-            
-            // Map the Supplements ListView with standard handlers
-            SupplementsListView.ItemsSource = _viewModel.Supplements;
+            _isRefreshing = true;
+            try
+            {
+                NutrientsListView.ItemsSource = _viewModel.NutrientStatuses;
+                FoodJournalListView.ItemsSource = _viewModel.CurrentDayFood;
+                StapleListView.ItemsSource = null;
+                StapleListView.ItemsSource = _viewModel.RecurringFoods;
+                RdaListEditor.ItemsSource = Nutrients.Definitions;
+                
+                // Map the Supplements ListView with standard handlers
+                SupplementsListView.ItemsSource = null;
+                SupplementsListView.ItemsSource = _viewModel.Supplements;
 
-            // Update Dashboard Dials numerical displays
-            UpdateDashboardSumDisplays();
+                // Update Dashboard Dials numerical displays
+                UpdateDashboardSumDisplays();
+            }
+            finally
+            {
+                _isRefreshing = false;
+            }
         }
 
         private void UpdateDashboardSumDisplays()
@@ -127,7 +147,8 @@ namespace DesktopNutritionTracker
         // Calendar Prev / Next click triggers
         private void PrevDay_Click(object sender, RoutedEventArgs e)
         {
-            if (DateTime.TryParse(_viewModel.CurrentDateString, out var date))
+            DateTime date;
+            if (DateTime.TryParse(_viewModel.CurrentDateString, out date))
             {
                 _viewModel.CurrentDateString = date.AddDays(-1).ToString("yyyy-MM-dd");
                 RefreshListViews();
@@ -136,7 +157,8 @@ namespace DesktopNutritionTracker
 
         private void NextDay_Click(object sender, RoutedEventArgs e)
         {
-            if (DateTime.TryParse(_viewModel.CurrentDateString, out var date))
+            DateTime date;
+            if (DateTime.TryParse(_viewModel.CurrentDateString, out date))
             {
                 _viewModel.CurrentDateString = date.AddDays(1).ToString("yyyy-MM-dd");
                 RefreshListViews();
@@ -147,6 +169,62 @@ namespace DesktopNutritionTracker
         {
             _viewModel.CurrentDateString = DateTime.Today.ToString("yyyy-MM-dd");
             RefreshListViews();
+        }
+
+        private void AddStapleToPlan_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            if (btn != null && btn.DataContext is FoodLogEntry staple)
+            {
+                if (!_viewModel.SelectedMenuStaples.Contains(staple))
+                {
+                    _viewModel.SelectedMenuStaples.Add(staple);
+                    _viewModel.AiPlannerStatusText = $"Added '{staple.FoodName}' as a usual staple food for today.";
+                }
+                else
+                {
+                    _viewModel.AiPlannerStatusText = $"'{staple.FoodName}' is already added to active menu staples.";
+                }
+            }
+        }
+
+        private void RemoveStapleFromPlan_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            if (btn != null && btn.DataContext is FoodLogEntry staple)
+            {
+                if (_viewModel.SelectedMenuStaples.Contains(staple))
+                {
+                    _viewModel.SelectedMenuStaples.Remove(staple);
+                    _viewModel.AiPlannerStatusText = $"Removed '{staple.FoodName}' from active menu staples.";
+                }
+            }
+        }
+
+        private async void GenerateAiMenu_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                await _viewModel.GenerateAiMenuPlanAsync();
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar($"Planning failed: {ex.Message}");
+            }
+        }
+
+        private void CommitPlannedMenu_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                _viewModel.CommitPlannedMenuToJournal();
+                RefreshListViews();
+                ShowSnackbar("Menu successfully saved to log journal!");
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar($"Saving failed: {ex.Message}");
+            }
         }
 
         // Shortcuts
@@ -244,12 +322,91 @@ namespace DesktopNutritionTracker
             }
         }
 
+        private void ExportTodaySummaryHtml_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var sfd = new Microsoft.Win32.SaveFileDialog();
+                sfd.FileName = $"NutriScribe_Report_{_viewModel.CurrentDateString}";
+                sfd.DefaultExt = ".html";
+                sfd.Filter = "HTML Document (*.html)|*.html";
+
+                bool? result = sfd.ShowDialog();
+                if (result == true)
+                {
+                    string reportContent = _viewModel.GenerateHtmlReport();
+                    System.IO.File.WriteAllText(sfd.FileName, reportContent, System.Text.Encoding.UTF8);
+                    ShowSnackbar($"HTML clinical report saved to {System.IO.Path.GetFileName(sfd.FileName)}");
+                    
+                    // Proactively prompt user if they want to view it in default browser
+                    if (System.Windows.MessageBox.Show("Report exported successfully! Would you like to view this report in your default web browser?", "Open Report", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) == System.Windows.MessageBoxResult.Yes)
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(sfd.FileName) { UseShellExecute = true });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar($"Export failed: {ex.Message}");
+            }
+        }
+
+        private void ExportWeeklySummaryHtml_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var sfd = new Microsoft.Win32.SaveFileDialog();
+                sfd.FileName = $"NutriScribe_Weekly_Report_{_viewModel.CurrentDateString}";
+                sfd.DefaultExt = ".html";
+                sfd.Filter = "HTML Document (*.html)|*.html";
+
+                bool? result = sfd.ShowDialog();
+                if (result == true)
+                {
+                    string reportContent = _viewModel.GenerateWeeklyHtmlReport();
+                    System.IO.File.WriteAllText(sfd.FileName, reportContent, System.Text.Encoding.UTF8);
+                    ShowSnackbar($"HTML clinical weekly report saved to {System.IO.Path.GetFileName(sfd.FileName)}");
+                    
+                    if (System.Windows.MessageBox.Show("Weekly report exported successfully! Would you like to view this report in your default web browser?", "Open Weekly Report", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) == System.Windows.MessageBoxResult.Yes)
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(sfd.FileName) { UseShellExecute = true });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar($"Weekly export failed: {ex.Message}");
+            }
+        }
+
         private void DownloadTextReport_Click(object sender, RoutedEventArgs e)
         {
             ExportTodaySummaryTxt_Click(sender, e);
         }
 
         private void ImportJson_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            if (btn != null)
+            {
+                if (btn.ContextMenu != null)
+                {
+                    btn.ContextMenu.PlacementTarget = btn;
+                    btn.ContextMenu.IsOpen = true;
+                }
+                else
+                {
+                    ImportLocalJson();
+                }
+            }
+        }
+
+        private void ImportLocalJson_Click(object sender, RoutedEventArgs e)
+        {
+            ImportLocalJson();
+        }
+
+        private void ImportLocalJson()
         {
             try
             {
@@ -260,16 +417,27 @@ namespace DesktopNutritionTracker
                 bool? result = ofd.ShowDialog();
                 if (result == true)
                 {
-                    string json = System.IO.File.ReadAllText(ofd.FileName, System.Text.Encoding.UTF8).Trim();
+                    string rawJson = System.IO.File.ReadAllText(ofd.FileName, System.Text.Encoding.UTF8).Trim();
                     
-                    if (string.IsNullOrEmpty(json))
+                    if (string.IsNullOrEmpty(rawJson))
                     {
                         ShowSnackbar("The selected JSON file is empty.");
                         return;
                     }
 
+                    string json = NormalizeJsonKeys(rawJson);
+
                     if (json.StartsWith("["))
                     {
+                        // Validate array schema before deserialization
+                        if (!DesktopNutritionTracker.Services.StorageService.ValidateJsonSchema(rawJson, out List<string> arrayErrors))
+                        {
+                            string errMsg = "JSON Array Schema Validation Failed:\n" + string.Join("\n", arrayErrors);
+                            MessageBox.Show(errMsg, "Import Fault - Schema Mismatch", MessageBoxButton.OK, MessageBoxImage.Error);
+                            ShowSnackbar("Import failed: JSON array schema mismatch.");
+                            return;
+                        }
+
                         // JSON Array - Could be Supplements/Nutrients or Food Log Entries!
                         bool parsedAsSupplements = false;
                         try
@@ -316,17 +484,9 @@ namespace DesktopNutritionTracker
                         // JSON Object - Try Full Database Backup
                         try
                         {
-                            var importedData = Newtonsoft.Json.JsonConvert.DeserializeObject<StorageData>(json);
-                            if (importedData != null && (importedData.Supplements?.Count > 0 || importedData.FoodEntries?.Count > 0))
-                            {
-                                _viewModel.ImportData(importedData);
-                                RefreshListViews();
-                                ShowSnackbar("Full Database Backup imported successfully!");
-                            }
-                            else
-                            {
-                                ShowSnackbar("JSON object did not map to a standard NutriScribe Database backup.");
-                            }
+                            _viewModel.ImportRawJsonData(rawJson);
+                            RefreshListViews();
+                            ShowSnackbar("Full Database Backup imported successfully!");
                         }
                         catch (Exception ex)
                         {
@@ -344,6 +504,101 @@ namespace DesktopNutritionTracker
             {
                 MessageBox.Show($"File load failure: {ex.Message}", "Import Fault", MessageBoxButton.OK, MessageBoxImage.Error);
                 ShowSnackbar($"Import failed: {ex.Message}");
+            }
+        }
+
+        private async void ExportFirestoreToJson_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                ShowSnackbar("Connecting to Firestore cloud to fetch current backup...");
+                
+                // Get the backup from Firestore
+                var firestoreData = await _viewModel.GetFirestoreBackupDataAsync();
+                
+                var sfd = new Microsoft.Win32.SaveFileDialog();
+                sfd.FileName = $"NutriScribe_FirestoreBackup_{_viewModel.CurrentDateString}";
+                sfd.DefaultExt = ".json";
+                sfd.Filter = "NutriScribe Database Backup (*.json)|*.json";
+
+                bool? result = sfd.ShowDialog();
+                if (result == true)
+                {
+                    string json = Newtonsoft.Json.JsonConvert.SerializeObject(firestoreData, Newtonsoft.Json.Formatting.Indented);
+                    System.IO.File.WriteAllText(sfd.FileName, json, System.Text.Encoding.UTF8);
+                    ShowSnackbar($"Firestore collection backup saved to {System.IO.Path.GetFileName(sfd.FileName)}!");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Firestore Export Fault: {ex.Message}", "Firestore Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShowSnackbar($"Firestore export failed: {ex.Message}");
+            }
+        }
+
+        private async void RestoreFirestoreFromJson_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var ofd = new Microsoft.Win32.OpenFileDialog();
+                ofd.DefaultExt = ".json";
+                ofd.Filter = "NutriScribe Database Backup (*.json)|*.json";
+
+                bool? result = ofd.ShowDialog();
+                if (result == true)
+                {
+                    string rawJson = System.IO.File.ReadAllText(ofd.FileName, System.Text.Encoding.UTF8).Trim();
+                    
+                    if (string.IsNullOrEmpty(rawJson))
+                    {
+                        ShowSnackbar("The selected JSON file is empty.");
+                        return;
+                    }
+
+                    string json = NormalizeJsonKeys(rawJson);
+
+                    // Attempt to parse as StorageData
+                    StorageData importedData;
+                    try
+                    {
+                        importedData = Newtonsoft.Json.JsonConvert.DeserializeObject<StorageData>(json);
+                        if (importedData == null || (importedData.Supplements?.Count == 0 && importedData.FoodEntries?.Count == 0))
+                        {
+                            throw new Exception("The parsed file contains no food entries or supplements.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Selected file is not a valid database backup. Details: {ex.Message}", "Invalid Backup Schema", MessageBoxButton.OK, MessageBoxImage.Error);
+                        ShowSnackbar("Restore cancelled: Invalid JSON schema.");
+                        return;
+                    }
+
+                    // Show confirmation warning dialog
+                    var confirmResult = MessageBox.Show(
+                        "WARNING: This operation will completely OVERWRITE both your current cloud Firestore collection and your local database with the contents of this JSON backup file.\n\n" +
+                        "This operation is irreversible.\n\n" +
+                        "Are you sure you want to proceed?",
+                        "Confirm Overwrite & Restore Collection",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning);
+
+                    if (confirmResult == MessageBoxResult.Yes)
+                    {
+                        ShowSnackbar("Restoring & overwriting cloud Firestore collection...");
+                        
+                        // Perform overwrite & import
+                        await _viewModel.OverwriteFirestoreCollectionAsync(importedData);
+                        
+                        RefreshListViews();
+                        ShowSnackbar("Firestore collection & local database restored successfully!");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Firestore Restore Fault: {ex.Message}", "Firestore Restore Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShowSnackbar($"Firestore restore failed: {ex.Message}");
             }
         }
 
@@ -612,7 +867,8 @@ namespace DesktopNutritionTracker
                 return;
             }
 
-            if (!double.TryParse(_viewModel.AIQueryServingSizeText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double qty) || qty <= 0)
+            double qty;
+            if (!double.TryParse(_viewModel.AIQueryServingSizeText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out qty) || qty <= 0)
             {
                 ShowSnackbar("Please enter a valid positive multiplier (e.g. 1.0, 1.5).");
                 return;
@@ -626,6 +882,26 @@ namespace DesktopNutritionTracker
             catch (Exception ex)
             {
                 ShowSnackbar($"Fetch failed: {ex.Message}");
+            }
+        }
+
+        private void CopyEngineStatus_Click(object sender, RoutedEventArgs e)
+        {
+            if (!string.IsNullOrEmpty(_viewModel.AIFetchStatusText))
+            {
+                try
+                {
+                    Clipboard.SetText(_viewModel.AIFetchStatusText);
+                    ShowSnackbar("Engine status copied to clipboard!");
+                }
+                catch (Exception ex)
+                {
+                    ShowSnackbar($"Clipboard copy failed: {ex.Message}");
+                }
+            }
+            else
+            {
+                ShowSnackbar("No engine status text to copy.");
             }
         }
 
@@ -658,13 +934,64 @@ namespace DesktopNutritionTracker
             ShowSnackbar("Preview cleared.");
         }
 
+        private async void UsdaSearch_Click(object sender, RoutedEventArgs e)
+        {
+            await _viewModel.SearchUsdaFoodsAsync();
+        }
+
+        private async void UsdaSearchInput_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key == System.Windows.Input.Key.Enter)
+            {
+                await _viewModel.SearchUsdaFoodsAsync();
+            }
+        }
+
+        private async void UsdaResultsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is ListView listView && listView.SelectedItem is UsdaNutrientProfile selectedItem)
+            {
+                await _viewModel.LoadSelectedUsdaDetailAsync(selectedItem);
+            }
+        }
+
+        private void CommitUsdaLog_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                bool success = _viewModel.CommitUsdaResultToToday();
+                if (success)
+                {
+                    ShowSnackbar(_viewModel.OperationMessage ?? "USDA Food logged successfully!");
+                    RefreshListViews();
+                }
+                else
+                {
+                    ShowSnackbar("Failed to log food. Selected food is null.");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowSnackbar($"Failed to log: {ex.Message}");
+            }
+        }
+
+        private void ClearUsdaLog_Click(object sender, RoutedEventArgs e)
+        {
+            _viewModel.SelectedUsdaResult = null;
+            _viewModel.UsdaSearchQuery = "";
+            _viewModel.UsdaSearchResults.Clear();
+            _viewModel.UsdaSearchStatusText = "Cleared. Ready for next query!";
+            ShowSnackbar("USDA selection cleared.");
+        }
+
         // Text Placeholders helpers
         private void TextBoxPlaceholder_GotFocus(object sender, RoutedEventArgs e)
         {
             if (AddFoodInput.Text == PlaceholderText)
             {
                 AddFoodInput.Text = "";
-                AddFoodInput.Foreground = System.Windows.Media.Brushes.White;
+                AddFoodInput.Foreground = (System.Windows.Media.SolidColorBrush)FindResource("TextPrimary");
             }
         }
 
@@ -673,26 +1000,54 @@ namespace DesktopNutritionTracker
             if (string.IsNullOrWhiteSpace(AddFoodInput.Text))
             {
                 AddFoodInput.Text = PlaceholderText;
-                AddFoodInput.Foreground = System.Windows.Media.Brushes.Gray;
+                AddFoodInput.Foreground = System.Windows.Media.Brushes.DimGray;
             }
         }
 
         // Supplement Logging Handlers
         private void SupplementTaken_Checked(object sender, RoutedEventArgs e)
         {
-            if (sender is CheckBox cb && cb.Tag is Supplement sup)
+            if (_isRefreshing) return;
+            if (sender is CheckBox cb)
             {
-                _viewModel.ToggleSupplementTaken(sup, true);
-                RefreshListViews();
+                if (cb.Tag is Supplement sup)
+                {
+                    int index = _viewModel.Supplements.IndexOf(sup);
+                    System.Diagnostics.Debug.WriteLine($"[SupplementSelection] CHECKED: Supplement '{sup.Name}' (ID: {sup.Id}) at list index {index}. Total list count: {_viewModel.Supplements.Count}. Key nutrients logged: {string.Join(", ", sup.Nutrients.Keys)}");
+                    _viewModel.ToggleSupplementTaken(sup, true);
+                    RefreshListViews();
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SupplementSelection] WARNING: Checked sender CheckBox has a null or invalid Tag: {cb.Tag?.GetType()?.FullName ?? "null"}");
+                }
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"[SupplementSelection] WARNING: Checked sender is not a CheckBox: {sender?.GetType()?.FullName ?? "null"}");
             }
         }
 
         private void SupplementTaken_Unchecked(object sender, RoutedEventArgs e)
         {
-            if (sender is CheckBox cb && cb.Tag is Supplement sup)
+            if (_isRefreshing) return;
+            if (sender is CheckBox cb)
             {
-                _viewModel.ToggleSupplementTaken(sup, false);
-                RefreshListViews();
+                if (cb.Tag is Supplement sup)
+                {
+                    int index = _viewModel.Supplements.IndexOf(sup);
+                    System.Diagnostics.Debug.WriteLine($"[SupplementSelection] UNCHECKED: Supplement '{sup.Name}' (ID: {sup.Id}) at list index {index}. Total list count: {_viewModel.Supplements.Count}");
+                    _viewModel.ToggleSupplementTaken(sup, false);
+                    RefreshListViews();
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SupplementSelection] WARNING: Unchecked sender CheckBox has a null or invalid Tag: {cb.Tag?.GetType()?.FullName ?? "null"}");
+                }
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"[SupplementSelection] WARNING: Unchecked sender is not a CheckBox: {sender?.GetType()?.FullName ?? "null"}");
             }
         }
 
@@ -728,7 +1083,8 @@ namespace DesktopNutritionTracker
         {
             if (RdaListEditor.SelectedItem is NutrientDefinition def)
             {
-                if (double.TryParse(EditRdaInput.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out double val))
+                double val;
+                if (double.TryParse(EditRdaInput.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out val))
                 {
                     _viewModel.UpdateCustomRda(def.Key, val);
                     RefreshListViews();
@@ -821,6 +1177,21 @@ namespace DesktopNutritionTracker
         private void SnackbarDismiss_Click(object sender, RoutedEventArgs e)
         {
             NotificationSnackbar.Visibility = Visibility.Collapsed;
+        }
+
+        private void ScanDailyAlerts_Click(object sender, RoutedEventArgs e)
+        {
+            _viewModel.CheckNutrientAlerts(autoShow: true);
+        }
+
+        private void DismissAlerts_Click(object sender, RoutedEventArgs e)
+        {
+            _viewModel.IsAlertModalVisible = false;
+        }
+
+        private static string NormalizeJsonKeys(string json)
+        {
+            return DesktopNutritionTracker.Services.StorageService.NormalizeJsonKeys(json);
         }
     }
 }

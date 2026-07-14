@@ -109,7 +109,8 @@ namespace DesktopNutritionTracker.Models
 
         private double GetNutrient(string key)
         {
-            return Nutrients.TryGetValue(key, out var val) ? val : 0.0;
+            double val;
+            return Nutrients.TryGetValue(key, out val) ? val : 0.0;
         }
 
         private void SetNutrient(string key, double value)
@@ -181,7 +182,8 @@ namespace DesktopNutritionTracker.Models
             foreach (var def in Models.Nutrients.Definitions)
             {
                 double targetRda = def.Rda;
-                if (customRdaOverrides != null && customRdaOverrides.TryGetValue(def.Key, out double customVal))
+                double customVal;
+                if (customRdaOverrides != null && customRdaOverrides.TryGetValue(def.Key, out customVal))
                 {
                     targetRda = customVal;
                 }

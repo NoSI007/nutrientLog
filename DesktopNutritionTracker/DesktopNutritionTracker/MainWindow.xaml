@@ -108,6 +108,18 @@
                 </ListBoxItem>
                 <ListBoxItem>
                     <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🍽️  " FontSize="16"/>
+                        <TextBlock Text="AI Menu Planner" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🔍  " FontSize="16"/>
+                        <TextBlock Text="USDA Search" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
                         <TextBlock Text="📑  " FontSize="16"/>
                         <TextBlock Text="RDA 41 Directory" VerticalAlignment="Center" FontWeight="SemiBold"/>
                     </StackPanel>
@@ -167,6 +179,13 @@
                             </Style>
                         </Button.Resources>
                     </Button>
+                    <Button Content="Scan Daily Alerts 🚨" Background="#1E3A8A" Foreground="White" BorderThickness="0" Height="26" FontWeight="SemiBold" Click="ScanDailyAlerts_Click" Margin="0,6,0,0">
+                        <Button.Resources>
+                            <Style TargetType="Border">
+                                <Setter Property="CornerRadius" Value="4"/>
+                            </Style>
+                        </Button.Resources>
+                    </Button>
                 </StackPanel>
             </Border>
         </Grid>
@@ -208,6 +227,12 @@
                                     <Setter Property="CornerRadius" Value="4"/>
                                 </Style>
                             </Button.Resources>
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Import / Restore Local JSON File (.json)" Click="ImportLocalJson_Click"/>
+                                    <MenuItem Header="Restore &amp; Overwrite Firestore from JSON File..." Click="RestoreFirestoreFromJson_Click"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
                         </Button>
                         <Button Content="💾 Export JSON" Background="Transparent" BorderBrush="{StaticResource BorderColor}" BorderThickness="1" Foreground="{StaticResource TextPrimary}" Padding="10,6" FontWeight="SemiBold" Click="ExportJson_Click" Margin="0,0,8,0">
                             <Button.Resources>
@@ -220,6 +245,8 @@
                                     <MenuItem Header="Export Full Database Backup (.json)" Click="ExportFullDb_Click"/>
                                     <MenuItem Header="Export Supplements List Only (.json)" Click="ExportSupplements_Click"/>
                                     <MenuItem Header="Export Food Journal Logs Only (.json)" Click="ExportFoodLogs_Click"/>
+                                    <Separator/>
+                                    <MenuItem Header="Export Firestore Collection to JSON File (.json)" Click="ExportFirestoreToJson_Click"/>
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
@@ -234,6 +261,9 @@
                                     <MenuItem Header="Export Today's Clinical Summary (.csv)" Click="ExportTodaySummaryCsv_Click"/>
                                     <MenuItem Header="Export Full Food Journal Table (.csv)" Click="ExportFullJournalCsv_Click"/>
                                     <MenuItem Header="Export Today's Plain Text Report (.txt)" Click="ExportTodaySummaryTxt_Click"/>
+                                    <MenuItem Header="Export Today's Beautiful Web Report (.html)" Click="ExportTodaySummaryHtml_Click"/>
+                                    <Separator/>
+                                    <MenuItem Header="Export Weekly Beautiful Web Report (.html)" Click="ExportWeeklySummaryHtml_Click"/>
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
@@ -452,9 +482,17 @@
 
                                 <ListView Grid.Row="1" x:Name="NutrientsListView" Background="Transparent" BorderThickness="0" Foreground="{StaticResource TextPrimary}"
                                           ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="BorderThickness" Value="0"/>
+                                            <Setter Property="Padding" Value="0"/>
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
                                     <ListView.ItemTemplate>
                                         <DataTemplate DataType="{x:Type models:NutrientStatus}">
-                                            <Border BorderBrush="{StaticResource BorderColor}" BorderThickness="0,0,0,1" Padding="10,8" Width="850">
+                                            <Border BorderBrush="{StaticResource BorderColor}" BorderThickness="0,0,0,1" Padding="10,8" HorizontalAlignment="Stretch">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="200"/>
@@ -809,7 +847,7 @@
 
                                             <!-- Servings factor -->
                                             <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                                                <TextBlock Text="Serving Multiplier:" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5}"/>
+                                                <TextBlock Text="Serving Multiplier:" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5"/>
                                                 <TextBox Text="{Binding AIQueryServingSizeText, UpdateSourceTrigger=PropertyChanged}" 
                                                          Height="32" Background="{StaticResource BgDark}" BorderBrush="{StaticResource BorderColor}" 
                                                          Foreground="{StaticResource TextPrimary}" Padding="8,0" VerticalContentAlignment="Center" HorizontalContentAlignment="Center"/>
@@ -818,7 +856,7 @@
 
                                             <!-- Meal Type selection -->
                                             <StackPanel Grid.Column="1" Margin="8,0,0,0">
-                                                <TextBlock Text="Meal Category:" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5}"/>
+                                                <TextBlock Text="Meal Category:" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5"/>
                                                 <ComboBox ItemsSource="{Binding MealTypes}" SelectedItem="{Binding AIQueryMealType}"
                                                           Height="32" Background="{StaticResource BgDark}" BorderBrush="{StaticResource BorderColor}" 
                                                           Foreground="{StaticResource TextPrimary}" Padding="8,0" VerticalContentAlignment="Center"/>
@@ -830,10 +868,23 @@
 
                                         <!-- Status text displaying AI feedback -->
                                         <Border Background="{StaticResource BgDark}" CornerRadius="6" Padding="12" Margin="0,0,0,15">
-                                            <StackPanel>
-                                                <TextBlock Text="📡 ENGINE STATUS:" FontSize="10" FontWeight="Bold" Foreground="{StaticResource TextSecondary}"/>
-                                                <TextBlock Text="{Binding AIFetchStatusText}" FontSize="11" Foreground="{StaticResource TextPrimary}" Margin="0,4,0,0" TextWrapping="Wrap"/>
-                                            </StackPanel>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="📡 ENGINE STATUS:" FontSize="10" FontWeight="Bold" Foreground="{StaticResource TextSecondary}"/>
+                                                    <TextBox Text="{Binding AIFetchStatusText, Mode=OneWay}" IsReadOnly="True" Background="Transparent" BorderThickness="0" FontSize="11" Foreground="{StaticResource TextPrimary}" Margin="0,4,0,0" TextWrapping="Wrap" BorderBrush="{x:Null}" SelectionBrush="{StaticResource AccentPrimary}"/>
+                                                </StackPanel>
+                                                <Button Grid.Column="1" Content="📋 Copy" FontSize="10" Padding="6,2" Height="20" Background="{StaticResource BgDark}" Foreground="{StaticResource TextSecondary}" Click="CopyEngineStatus_Click" VerticalAlignment="Top" BorderThickness="1" BorderBrush="{StaticResource BorderColor}" Margin="5,0,0,0">
+                                                    <Button.Resources>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="CornerRadius" Value="4"/>
+                                                        </Style>
+                                                    </Button.Resources>
+                                                </Button>
+                                            </Grid>
                                         </Border>
 
                                         <!-- Trigger fetching nutritional data -->
@@ -992,6 +1043,575 @@
                                             </Button>
                                         </Grid>
                                     </Grid>
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+
+                <!-- TAB: AI DIRECTED MENU PLANNER -->
+                <TabItem>
+                    <Grid Margin="20">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/> <!-- Status/Header Bar -->
+                            <RowDefinition Height="*"/>    <!-- Split columns -->
+                        </Grid.RowDefinitions>
+
+                        <!-- Header Status Card -->
+                        <Border Grid.Row="0" Background="{StaticResource BgCard}" CornerRadius="10" Padding="15" Margin="0,0,0,15">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="🍽️ Clinical AI Directed Menu Planner" FontSize="18" FontWeight="Bold" Foreground="{StaticResource AccentPrimary}"/>
+                                    <TextBlock Text="Add your usual staple foods first, and Gemini AI will automatically calculate deficits and suggest customized meals &amp; snacks to reach 100% compliance." FontSize="11" Foreground="{StaticResource TextSecondary}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="1" Background="{StaticResource BgDark}" CornerRadius="4" Padding="10,5" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Planner Engine: " FontSize="11" Foreground="{StaticResource TextSecondary}"/>
+                                        <TextBlock Text="Gemini Active" FontSize="11" FontWeight="Bold" Foreground="{StaticResource StatusGreen}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <!-- Main Split Content -->
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.1*"/> <!-- Left Panel: Staples Selection -->
+                                <ColumnDefinition Width="1.4*"/> <!-- Right Panel: Suggested Menu -->
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Column 0: Usual Staples Picker -->
+                            <Border Grid.Column="0" Background="{StaticResource BgCard}" CornerRadius="12" Padding="20" Margin="0,0,10,0">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/> <!-- Section Title -->
+                                        <RowDefinition Height="*"/>    <!-- Staples List -->
+                                        <RowDefinition Height="Auto"/> <!-- Active Staples List Title -->
+                                        <RowDefinition Height="Auto"/> <!-- Selected Staples List -->
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Staples Templates -->
+                                    <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                                        <TextBlock Text="⭐ Available Favorite Staples" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextPrimary}"/>
+                                        <TextBlock Text="Click '+' next to any favorite food to add it as a 'usual' for today's menu." FontSize="11" Foreground="{StaticResource TextSecondary}" Margin="0,2,0,5"/>
+                                    </StackPanel>
+
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,0,0,15">
+                                        <ItemsControl ItemsSource="{Binding RecurringFoods}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="{StaticResource BgDark}" BorderBrush="{StaticResource BorderColor}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,8">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding FoodName}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" FontSize="12" TextWrapping="Wrap"/>
+                                                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                                                    <TextBlock Text="{Binding Quantity}" Foreground="{StaticResource TextSecondary}" FontSize="10.5"/>
+                                                                    <TextBlock Text=" " FontSize="10.5"/>
+                                                                    <TextBlock Text="{Binding Unit}" Foreground="{StaticResource TextSecondary}" FontSize="10.5"/>
+                                                                    <TextBlock Text=" • " Foreground="{StaticResource TextSecondary}" FontSize="10.5"/>
+                                                                    <TextBlock Text="{Binding MealType}" Foreground="{StaticResource AccentPrimary}" FontSize="10.5" FontWeight="SemiBold"/>
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                            <Button Grid.Column="1" Content="＋ Add" Height="26" Padding="8,0" Background="{StaticResource AccentSecondary}" Foreground="White" BorderThickness="0" Click="AddStapleToPlan_Click" VerticalAlignment="Center">
+                                                                <Button.Resources>
+                                                                    <Style TargetType="Border">
+                                                                        <Setter Property="CornerRadius" Value="4"/>
+                                                                    </Style>
+                                                                </Button.Resources>
+                                                            </Button>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+
+                                    <Separator Grid.Row="2" Background="{StaticResource BorderColor}" Margin="0,5,0,10"/>
+
+                                    <!-- Selected Staples for today's plan -->
+                                    <StackPanel Grid.Row="2" Margin="0,10,0,8">
+                                        <TextBlock Text="📋 Active Menu Staples (Your Usuals)" FontSize="13" FontWeight="Bold" Foreground="{StaticResource TextPrimary}"/>
+                                        <TextBlock Text="These are locked in and logged first:" FontSize="10.5" Foreground="{StaticResource TextSecondary}" Margin="0,2,0,5"/>
+                                    </StackPanel>
+
+                                    <!-- List of Active Staples -->
+                                    <ScrollViewer Grid.Row="3" Height="150" VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding SelectedMenuStaples}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="#1E3A8A" BorderBrush="#3B82F6" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,6">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Grid.Column="0">
+                                                                <TextBlock Text="{Binding FoodName}" FontWeight="Bold" Foreground="White" FontSize="11.5"/>
+                                                                <TextBlock Text="{Binding MealType}" Foreground="#93C5FD" FontSize="9.5" FontWeight="SemiBold"/>
+                                                            </StackPanel>
+                                                            <Button Grid.Column="1" Content="✕" Width="22" Height="22" Background="Transparent" Foreground="#FCA5A5" BorderThickness="0" Click="RemoveStapleFromPlan_Click" VerticalAlignment="Center" FontWeight="Bold"/>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Border>
+
+                            <!-- Column 1: Suggested Menu & Committing -->
+                            <Border Grid.Column="1" Background="{StaticResource BgCard}" CornerRadius="12" Padding="20">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/> <!-- Status/Engine -->
+                                        <RowDefinition Height="*"/>    <!-- Suggestions Scroll List -->
+                                        <RowDefinition Height="Auto"/> <!-- Action Buttons -->
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Status Banner -->
+                                    <Border Grid.Row="0" Background="{StaticResource BgDark}" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                                        <StackPanel>
+                                            <TextBlock Text="📡 ENGINE PLANNER STATUS" FontSize="10.5" FontWeight="Bold" Foreground="{StaticResource TextSecondary}"/>
+                                            <TextBlock Text="{Binding AiPlannerStatusText}" FontSize="12" Foreground="{StaticResource TextPrimary}" Margin="0,4,0,0" TextWrapping="Wrap" FontWeight="SemiBold"/>
+                                            <ProgressBar IsIndeterminate="{Binding IsAiPlanning}" Height="4" Foreground="{StaticResource AccentPrimary}" Margin="0,10,0,0" Background="Transparent">
+                                                <ProgressBar.Style>
+                                                    <Style TargetType="ProgressBar">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsAiPlanning}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </ProgressBar.Style>
+                                            </ProgressBar>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Suggestions Container -->
+                                    <Grid Grid.Row="1" Margin="0,0,0,15">
+                                        <!-- Placeholder when no menu generated yet -->
+                                        <Grid>
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasSuggestedMenu}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                <TextBlock Text="💡" FontSize="44" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                                                <TextBlock Text="AI SUGGESTED CLINICAL PLAN" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="Add your usual foods on the left, then click 'PLAN WITH AI' below. Gemini will review your RDA gaps and suggest optimal additions, including custom snacks to make a difference!" 
+                                                           FontSize="11" Foreground="{StaticResource TextSecondary}" TextAlignment="Center" TextWrapping="Wrap" Margin="0,8,0,0" MaxWidth="320"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Suggested Items List -->
+                                        <Grid>
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasSuggestedMenu}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="*"/>
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Text="✨ Suggested Menu Additions" FontSize="13" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,10"/>
+                                            
+                                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                                <ItemsControl ItemsSource="{Binding SuggestedMenuItems}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Background="{StaticResource BgDark}" BorderBrush="{StaticResource BorderColor}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="*"/>
+                                                                        <ColumnDefinition Width="Auto"/>
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <StackPanel Grid.Column="0">
+                                                                        <TextBlock Text="{Binding FoodName}" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" FontSize="12.5"/>
+                                                                        <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                                                            <TextBlock Text="{Binding MealType}" Foreground="{StaticResource AccentPrimary}" FontSize="10.5" FontWeight="Bold"/>
+                                                                            <TextBlock Text=" • " Foreground="{StaticResource TextSecondary}" FontSize="10.5"/>
+                                                                            <TextBlock Text="{Binding Quantity}" Foreground="{StaticResource TextSecondary}" FontSize="10.5"/>
+                                                                            <TextBlock Text=" " FontSize="10.5"/>
+                                                                            <TextBlock Text="{Binding Unit}" Foreground="{StaticResource TextSecondary}" FontSize="10.5"/>
+                                                                        </StackPanel>
+                                                                    </StackPanel>
+                                                                    
+                                                                    <!-- Micro-indicator of key nutrients in the suggestion -->
+                                                                    <Border Grid.Column="1" Background="#065F46" CornerRadius="4" Padding="8,4" VerticalAlignment="Center">
+                                                                        <TextBlock Text="RDA Compliant" FontSize="9.5" FontWeight="Bold" Foreground="#A7F3D0"/>
+                                                                    </Border>
+                                                                </Grid>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </ScrollViewer>
+                                        </Grid>
+                                    </Grid>
+
+                                    <!-- Action Buttons -->
+                                    <Grid Grid.Row="2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <Button Grid.Column="0" Content="🧠 PLAN WITH AI" Height="38" Margin="0,0,5,0" Background="{StaticResource AccentPrimary}" Foreground="White" FontWeight="Bold" Click="GenerateAiMenu_Click" BorderThickness="0">
+                                            <Button.Resources>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="CornerRadius" Value="6"/>
+                                                </Style>
+                                            </Button.Resources>
+                                        </Button>
+
+                                        <Button Grid.Column="1" Content="📓 LOG ENTIRE MENU" Height="38" Margin="5,0,0,0" Background="{StaticResource AccentSecondary}" Foreground="White" FontWeight="Bold" Click="CommitPlannedMenu_Click" BorderThickness="0">
+                                            <Button.Resources>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="CornerRadius" Value="6"/>
+                                                </Style>
+                                            </Button.Resources>
+                                            <Button.Style>
+                                                <Style TargetType="Button">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasSuggestedMenu}" Value="True">
+                                                            <Setter Property="IsEnabled" Value="True"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                        </Button>
+                                    </Grid>
+
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+
+                <!-- TAB: USDA FOOD DATABASE SEARCH -->
+                <TabItem>
+                    <Grid Margin="20">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/> <!-- Status/Header Bar -->
+                            <RowDefinition Height="*"/>    <!-- Split columns -->
+                        </Grid.RowDefinitions>
+
+                        <!-- Header status card -->
+                        <Border Grid.Row="0" Background="{StaticResource BgCard}" CornerRadius="10" Padding="15" Margin="0,0,0,15">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="🔍 Clinical USDA Food Database Search" FontSize="18" FontWeight="Bold" Foreground="{StaticResource AccentPrimary}"/>
+                                    <TextBlock Text="Query USDA FoodData Central's clinical molecular database and log exact nutrient items." FontSize="11" Foreground="{StaticResource TextSecondary}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <Border Grid.Column="1" Background="{StaticResource BgDark}" CornerRadius="4" Padding="10,5" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="Engine Connection: " FontSize="11" Foreground="{StaticResource TextSecondary}"/>
+                                        <TextBlock Text="{Binding UsdaApiKeyMasked}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource StatusGreen}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <!-- Main Split Content -->
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="1.1*"/> <!-- Search & Results pane -->
+                                <ColumnDefinition Width="1.4*"/> <!-- Details & Preview pane -->
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Column 0: Search & Results Pane -->
+                            <Border Grid.Column="0" Background="{StaticResource BgCard}" CornerRadius="12" Padding="20" Margin="0,0,10,0">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/> <!-- Title -->
+                                        <RowDefinition Height="Auto"/> <!-- Search input -->
+                                        <RowDefinition Height="Auto"/> <!-- Status -->
+                                        <RowDefinition Height="*"/>    <!-- Results list -->
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Text="📝 Search USDA FoodData Central" FontSize="15" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12"/>
+
+                                    <!-- Search input with Button -->
+                                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Grid.Column="0" Text="{Binding UsdaSearchQuery, UpdateSourceTrigger=PropertyChanged}" 
+                                                 Height="36" VerticalContentAlignment="Center" Padding="10,0"
+                                                 Background="{StaticResource BgDark}" Foreground="{StaticResource TextPrimary}" 
+                                                 BorderBrush="{StaticResource BorderColor}" CaretBrush="{StaticResource TextPrimary}"
+                                                 KeyDown="UsdaSearchInput_KeyDown"/>
+                                        <Button Grid.Column="1" Content="SEARCH" Width="80" Height="36" Margin="8,0,0,0"
+                                                Background="{StaticResource AccentPrimary}" Foreground="White" BorderThickness="0" FontWeight="Bold"
+                                                Click="UsdaSearch_Click">
+                                            <Button.Resources>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="CornerRadius" Value="6"/>
+                                                </Style>
+                                            </Button.Resources>
+                                        </Button>
+                                    </Grid>
+
+                                    <!-- Status / Progress -->
+                                    <StackPanel Grid.Row="2" Margin="0,0,0,10">
+                                        <TextBlock Text="{Binding UsdaSearchStatusText}" FontSize="11" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                        <ProgressBar IsIndeterminate="{Binding IsUsdaSearching}" Height="4" Foreground="{StaticResource AccentPrimary}" BorderThickness="0" Background="Transparent">
+                                            <ProgressBar.Style>
+                                                <Style TargetType="ProgressBar">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsUsdaSearching}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ProgressBar.Style>
+                                        </ProgressBar>
+                                    </StackPanel>
+
+                                    <!-- Results List -->
+                                    <ListView Grid.Row="3" ItemsSource="{Binding UsdaSearchResults}" SelectedItem="{Binding SelectedUsdaResult, Mode=TwoWay}"
+                                              Background="Transparent" BorderThickness="0" SelectionChanged="UsdaResultsList_SelectionChanged">
+                                        <ListView.ItemContainerStyle>
+                                            <Style TargetType="ListViewItem">
+                                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                <Setter Property="Background" Value="Transparent"/>
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+                                                <Setter Property="Padding" Value="8,10"/>
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter Property="Background" Value="#1E293B"/> <!-- Slightly darker slate background for selection -->
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ListView.ItemContainerStyle>
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                                        <TextBlock Text="{Binding Description}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" TextWrapping="Wrap" FontSize="12"/>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                            <TextBlock Text="Serving: " FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                                            <TextBlock Text="{Binding ServingSize}" FontSize="10" Foreground="{StaticResource TextPrimary}" FontWeight="SemiBold"/>
+                                                            <TextBlock Text="{Binding ServingSizeUnit}" FontSize="10" Foreground="{StaticResource TextPrimary}" FontWeight="SemiBold" Margin="2,0,12,0"/>
+                                                            <TextBlock Text="FDC ID: " FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                                            <TextBlock Text="{Binding FdcId}" FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="1" Text="➕" VerticalAlignment="Center" FontSize="14" Foreground="{StaticResource AccentPrimary}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
+                                </Grid>
+                            </Border>
+
+                            <!-- Column 1: Preview & Portion Workspace -->
+                            <Border Grid.Column="1" Background="{StaticResource BgCard}" CornerRadius="12" Padding="20">
+                                <Grid>
+                                    <!-- Onboarding Hint (Visible when no result loaded yet) -->
+                                    <Grid>
+                                        <Grid.Style>
+                                            <Style TargetType="Grid">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasUsdaPreviewResult}" Value="False">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Grid.Style>
+                                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20">
+                                            <TextBlock Text="🔬" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,15"/>
+                                            <TextBlock Text="USDA Clinical Analysis Workspace" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" HorizontalAlignment="Center"/>
+                                            <TextBlock Text="Select a food item from the search results. The 41 clinical nutrient indices will be parsed, scaled to your exact multiplier, and formatted here. You can then audit and commit it into your clinical journal." 
+                                                       TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextSecondary}" TextAlignment="Center" Margin="0,10,0,0" MaxWidth="320"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- Main preview details layout (Visible when a result is loaded) -->
+                                    <Grid>
+                                        <Grid.Style>
+                                            <Style TargetType="Grid">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasUsdaPreviewResult}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Grid.Style>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/> <!-- Portion controls -->
+                                            <RowDefinition Height="Auto"/> <!-- Title / Macro quick summary -->
+                                            <RowDefinition Height="*"/>    <!-- Detailed 41 scroll list -->
+                                            <RowDefinition Height="Auto"/> <!-- Log entry button -->
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Portion Control Row -->
+                                        <Grid Grid.Row="0" Margin="0,0,0,15">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- Servings factor -->
+                                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                                <TextBlock Text="Portion Multiplier (Servings):" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5"/>
+                                                <TextBox Text="{Binding UsdaServingCountText, UpdateSourceTrigger=PropertyChanged}" 
+                                                         Height="32" Background="{StaticResource BgDark}" BorderBrush="{StaticResource BorderColor}" 
+                                                         Foreground="{StaticResource TextPrimary}" Padding="8,0" VerticalContentAlignment="Center" HorizontalContentAlignment="Center"/>
+                                            </StackPanel>
+
+                                            <!-- Meal Type selection -->
+                                            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                                                <TextBlock Text="Log to Meal Category:" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,5"/>
+                                                <ComboBox ItemsSource="{Binding MealTypes}" SelectedItem="{Binding UsdaMealType}"
+                                                          Height="32" Background="{StaticResource BgDark}" BorderBrush="{StaticResource BorderColor}" 
+                                                          Foreground="{StaticResource TextPrimary}" Padding="8,0" VerticalContentAlignment="Center"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Title and Key macros cards -->
+                                        <StackPanel Grid.Row="1" Margin="0,0,0,15">
+                                            <TextBlock Text="{Binding UsdaPreviewFoodName}" FontSize="15" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" TextWrapping="Wrap"/>
+                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,10">
+                                                <TextBlock Text="Portion Intake: " FontSize="11" Foreground="{StaticResource TextSecondary}"/>
+                                                <TextBlock Text="{Binding UsdaPreviewQuantity, StringFormat={}{0:F1}}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextPrimary}"/>
+                                                <TextBlock Text=" servings (" FontSize="11" Foreground="{StaticResource TextSecondary}"/>
+                                                <TextBlock Text="{Binding UsdaMealType}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource AccentPrimary}"/>
+                                                <TextBlock Text=" slot)" FontSize="11" Foreground="{StaticResource TextSecondary}"/>
+                                            </StackPanel>
+
+                                            <!-- Core Macros Cards -->
+                                            <UniformGrid Columns="4" Rows="1" Height="60">
+                                                <!-- Calories -->
+                                                <Border Background="#EFF6FF" CornerRadius="6" BorderBrush="#DBEAFE" BorderThickness="1" Margin="0,0,4,0" Padding="6,4">
+                                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                        <TextBlock Text="Calories" FontSize="9" Foreground="#1E40AF" HorizontalAlignment="Center"/>
+                                                        <TextBlock Text="{Binding UsdaPreviewCalories, StringFormat={}{0:F0} kcal}" FontSize="12" FontWeight="Bold" Foreground="#1D4ED8" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <!-- Protein -->
+                                                <Border Background="#FDF2F8" CornerRadius="6" BorderBrush="#FCE7F3" BorderThickness="1" Margin="2,0,2,0" Padding="6,4">
+                                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                        <TextBlock Text="Protein" FontSize="9" Foreground="#9D174D" HorizontalAlignment="Center"/>
+                                                        <TextBlock Text="{Binding UsdaPreviewProtein, StringFormat={}{0:F1} g}" FontSize="12" FontWeight="Bold" Foreground="#BE185D" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <!-- Carbs -->
+                                                <Border Background="#FEF3C7" CornerRadius="6" BorderBrush="#FEEB99" BorderThickness="1" Margin="2,0,2,0" Padding="6,4">
+                                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                        <TextBlock Text="Carbohydrates" FontSize="9" Foreground="#92400E" HorizontalAlignment="Center"/>
+                                                        <TextBlock Text="{Binding UsdaPreviewCarbs, StringFormat={}{0:F1} g}" FontSize="12" FontWeight="Bold" Foreground="#B45309" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+                                                <!-- Fat -->
+                                                <Border Background="#ECFDF5" CornerRadius="6" BorderBrush="#D1FAE5" BorderThickness="1" Margin="4,0,0,0" Padding="6,4">
+                                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                        <TextBlock Text="Total Fat" FontSize="9" Foreground="#065F46" HorizontalAlignment="Center"/>
+                                                        <TextBlock Text="{Binding UsdaPreviewFat, StringFormat={}{0:F1} g}" FontSize="12" FontWeight="Bold" Foreground="#047857" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </UniformGrid>
+                                        </StackPanel>
+
+                                        <!-- Detailed nutrient list -->
+                                        <Border Grid.Row="2" BorderBrush="{StaticResource BorderColor}" BorderThickness="0,1,0,1" Margin="0,0,0,15">
+                                            <ListView ItemsSource="{Binding UsdaPreviewNutrients}" Background="Transparent" BorderThickness="0" Margin="0,5">
+                                                <ListView.View>
+                                                    <GridView>
+                                                        <GridViewColumn Header="Nutrient" Width="140" DisplayMemberBinding="{Binding Name}"/>
+                                                        <GridViewColumn Header="Group" Width="100" DisplayMemberBinding="{Binding Group}"/>
+                                                        <GridViewColumn Header="Value" Width="80" DisplayMemberBinding="{Binding DisplayIntake}"/>
+                                                        <GridViewColumn Header="RDA Limit" Width="80" DisplayMemberBinding="{Binding DisplayRda}"/>
+                                                        <GridViewColumn Header="Status" Width="100">
+                                                            <GridViewColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontWeight="SemiBold" FontSize="11"/>
+                                                                </DataTemplate>
+                                                            </GridViewColumn.CellTemplate>
+                                                        </GridViewColumn>
+                                                    </GridView>
+                                                </ListView.View>
+                                            </ListView>
+                                        </Border>
+
+                                        <!-- Action buttons to log or clear -->
+                                        <Grid Grid.Row="3">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <Button Grid.Column="0" Content="📥 COMMIT &amp; LOG TO MEAL JOURNAL" Height="36" Background="{StaticResource StatusGreen}" Foreground="White" BorderThickness="0" FontWeight="Bold" Click="CommitUsdaLog_Click" Margin="0,0,10,0">
+                                                <Button.Resources>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="CornerRadius" Value="6"/>
+                                                    </Style>
+                                                </Button.Resources>
+                                            </Button>
+
+                                            <Button Grid.Column="1" Content="Clear" Height="36" Padding="15,0" Background="Transparent" Foreground="{StaticResource AccentSecondary}" BorderBrush="{StaticResource BorderColor}" BorderThickness="1" Click="ClearUsdaLog_Click">
+                                                <Button.Resources>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="CornerRadius" Value="6"/>
+                                                    </Style>
+                                                </Button.Resources>
+                                            </Button>
+                                        </Grid>
+                                    </Grid>
+
+                                    <!-- Loading details overlay -->
+                                    <Border Background="#B8000000" CornerRadius="12" Visibility="Collapsed">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsUsdaDetailLoading}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                            <TextBlock Text="Parsing molecular clinical data..." FontSize="14" FontWeight="SemiBold" Foreground="White" Margin="0,0,0,10"/>
+                                            <ProgressBar IsIndeterminate="True" Width="150" Height="4" Foreground="{StaticResource AccentPrimary}"/>
+                                        </StackPanel>
+                                    </Border>
                                 </Grid>
                             </Border>
                         </Grid>
@@ -1433,21 +2053,21 @@
                                     <ListBox Grid.Row="1" x:Name="SupplementsListView" Background="Transparent" BorderThickness="0">
                                         <ListBox.ItemTemplate>
                                             <DataTemplate DataType="{x:Type models:Supplement}">
-                                                <Border BorderThickness="0,0,0,1" BorderBrush="{StaticResource BorderColor}" Padding="10,12" Width="820">
+                                                <Border BorderThickness="0,0,0,1" BorderBrush="{StaticResource BorderColor}" Padding="10,12" HorizontalAlignment="Stretch">
                                                     <Grid>
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="Auto"/>
-                                                            <ColumnDefinition Width="200"/>
-                                                            <ColumnDefinition Width="100"/>
-                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="220"/>
+                                                            <ColumnDefinition Width="110"/>
                                                             <ColumnDefinition Width="150"/>
+                                                            <ColumnDefinition Width="*"/>
                                                         </Grid.ColumnDefinitions>
 
                                                         <!-- Checklist status -->
                                                         <CheckBox Grid.Column="0" IsChecked="{Binding IsTaken, Mode=OneWay}" VerticalAlignment="Center" Margin="0,0,15,0" Checked="SupplementTaken_Checked" Unchecked="SupplementTaken_Unchecked" Tag="{Binding}"/>
 
                                                         <!-- Name -->
-                                                        <StackPanel Grid.Column="1">
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                             <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextPrimary}" FontWeight="Bold" FontSize="14"/>
                                                             <TextBlock Text="{Binding Notes}" Foreground="{StaticResource TextSecondary}" FontSize="10" TextWrapping="Wrap"/>
                                                         </StackPanel>
@@ -1462,13 +2082,20 @@
                                                         </StackPanel>
 
                                                         <!-- Nutrient content overview -->
-                                                        <ItemsControl Grid.Column="4" ItemsSource="{Binding Nutrients}">
+                                                        <ItemsControl Grid.Column="4" ItemsSource="{Binding Nutrients}" VerticalAlignment="Center">
+                                                            <ItemsControl.ItemsPanel>
+                                                                <ItemsPanelTemplate>
+                                                                    <WrapPanel Orientation="Horizontal"/>
+                                                                </ItemsPanelTemplate>
+                                                            </ItemsControl.ItemsPanel>
                                                             <ItemsControl.ItemTemplate>
                                                                 <DataTemplate>
-                                                                    <StackPanel Orientation="Horizontal" Margin="0,1">
-                                                                        <TextBlock Text="{Binding Key}" FontSize="10" Foreground="{StaticResource StatusYellow}" FontWeight="Bold" Margin="0,0,5,0"/>
-                                                                        <TextBlock Text="{Binding Value, StringFormat={}{0:F0}}" FontSize="10" Foreground="{StaticResource TextPrimary}" />
-                                                                    </StackPanel>
+                                                                    <Border Background="{StaticResource BgDark}" CornerRadius="6" Padding="6,3" Margin="2,2" BorderBrush="{StaticResource BorderColor}" BorderThickness="0.5">
+                                                                        <StackPanel Orientation="Horizontal">
+                                                                            <TextBlock Text="{Binding Key}" FontSize="9" Foreground="{StaticResource StatusYellow}" FontWeight="Bold" Margin="0,0,4,0"/>
+                                                                            <TextBlock Text="{Binding Value, StringFormat={}{0:F1}}" FontSize="9" Foreground="{StaticResource TextPrimary}" />
+                                                                        </StackPanel>
+                                                                    </Border>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>
                                                         </ItemsControl>
@@ -1550,6 +2177,119 @@
                             <!-- Cancel -->
                             <Button Grid.Column="1" Content="Cancel" Background="Transparent" Foreground="{StaticResource TextSecondary}" BorderThickness="0" HorizontalAlignment="Right" Click="CloseProfiler_Click"/>
                         </Grid>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- CLINICAL ALERT MODAL POPUP -->
+        <Grid Grid.Column="0" Grid.ColumnSpan="2" x:Name="NutrientAlertModal" Background="#B0000000">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsAlertModalVisible}" Value="True">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Border Background="{StaticResource BgCard}" Width="520" Height="480" CornerRadius="12" BorderBrush="{StaticResource BorderColor}" BorderThickness="1.5" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="25">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Modal Header -->
+                    <StackPanel Grid.Row="0" Margin="0,0,0,15">
+                        <TextBlock Text="🚨 Clinical Nutrient Alert Scanner" FontSize="18" FontWeight="Bold" Foreground="{StaticResource TextPrimary}"/>
+                        <TextBlock Text="Evaluating current daily logs against Recommended Dietary Allowances (RDA) and safety thresholds." Foreground="{StaticResource TextSecondary}" FontSize="11" Margin="1,2,0,0"/>
+                        <Separator Background="{StaticResource BorderColor}" Margin="0,10"/>
+                    </StackPanel>
+
+                    <!-- Alerts List -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="AlertsContainer">
+                            <ItemsControl ItemsSource="{Binding ActiveNutrientAlerts}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,0,10" CornerRadius="8" Padding="12" BorderThickness="1">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding AlertType}" Value="ExceededCeiling">
+                                                            <Setter Property="Background" Value="#33EF4444"/>
+                                                            <Setter Property="BorderBrush" Value="#66EF4444"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding AlertType}" Value="CriticalDeficit">
+                                                            <Setter Property="Background" Value="#33F59E0B"/>
+                                                            <Setter Property="BorderBrush" Value="#66F59E0B"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                
+                                                <!-- Icon/Symbol -->
+                                                <TextBlock Grid.Column="0" FontSize="20" Margin="0,0,12,0" VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding AlertType}" Value="ExceededCeiling">
+                                                                    <Setter Property="Text" Value="⚠️"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding AlertType}" Value="CriticalDeficit">
+                                                                    <Setter Property="Text" Value="📉"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+
+                                                <!-- Text content -->
+                                                <StackPanel Grid.Column="1">
+                                                    <TextBlock Text="{Binding NutrientName}" FontWeight="Bold" FontSize="14" Foreground="{StaticResource TextPrimary}"/>
+                                                    <TextBlock Text="{Binding Message}" FontSize="12" Foreground="{StaticResource TextPrimary}" FontWeight="SemiBold" Margin="0,2,0,4" TextWrapping="Wrap"/>
+                                                    <TextBlock Text="{Binding Suggestion}" FontSize="11" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap"/>
+                                                    
+                                                    <!-- Details badge -->
+                                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                                        <TextBlock Text="Intake: " FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                                        <TextBlock Text="{Binding CurrentIntake}" FontSize="10" Foreground="{StaticResource TextPrimary}" FontWeight="Bold"/>
+                                                        <TextBlock Text="{Binding Unit}" FontSize="10" Foreground="{StaticResource TextSecondary}" Margin="2,0,8,0"/>
+                                                        
+                                                        <TextBlock Text="Target: " FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                                        <TextBlock Text="{Binding TargetRda}" FontSize="10" Foreground="{StaticResource TextPrimary}" FontWeight="Bold"/>
+                                                        <TextBlock Text="{Binding Unit}" FontSize="10" Foreground="{StaticResource TextSecondary}" Margin="2,0,8,0"/>
+
+                                                        <TextBlock Text="Percentage: " FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                                        <TextBlock Text="{Binding Percentage}" FontSize="10" Foreground="{StaticResource TextPrimary}" FontWeight="Bold"/>
+                                                        <TextBlock Text="%" FontSize="10" Foreground="{StaticResource TextPrimary}" FontWeight="Bold"/>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Footer Action -->
+                    <StackPanel Grid.Row="2" Margin="0,15,0,0">
+                        <Button Content="Dismiss Clinical Warnings" Background="{StaticResource AccentPrimary}" Foreground="White" Height="36" FontWeight="Bold" Click="DismissAlerts_Click">
+                            <Button.Resources>
+                                <Style TargetType="Border">
+                                    <Setter Property="CornerRadius" Value="6"/>
+                                </Style>
+                            </Button.Resources>
+                        </Button>
                     </StackPanel>
                 </Grid>
             </Border>

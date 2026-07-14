@@ -8,7 +8,8 @@ namespace DesktopNutritionTracker.Services
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         {
-            if (value is string dateStr && DateTime.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            DateTime date;
+            if (value is string dateStr && DateTime.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date))
             {
                 return date;
             }
@@ -34,7 +35,8 @@ namespace DesktopNutritionTracker.Services
             {
                 string paramStr = parameter.ToString();
                 paramStr = paramStr.Replace(',', '.');
-                if (double.TryParse(paramStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double parsedParam))
+                double parsedParam;
+                if (double.TryParse(paramStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out parsedParam))
                 {
                     scale = parsedParam;
                 }
@@ -43,7 +45,8 @@ namespace DesktopNutritionTracker.Services
             if (value != null)
             {
                 string valueStr = value.ToString().Replace(',', '.');
-                if (double.TryParse(valueStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double numericVal))
+                double numericVal;
+                if (double.TryParse(valueStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out numericVal))
                 {
                     double result = numericVal * scale;
                     if (result < 4) return 4.0;
